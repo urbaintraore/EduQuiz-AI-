@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a student or teacher user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "teacher"] },
+        "university": { "type": "string" },
+        "schoolClass": { "type": "string" }
+      },
+      "required": ["id", "email", "password", "role"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Represents a course/subject folder created by a teacher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "code": { "type": "string" },
+        "category": { "type": "string" }
+      },
+      "required": ["id", "teacherId", "title", "code"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Represents a student enrolled in a course",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "enrolledAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "courseId", "enrolledAt"]
+    },
+    "Exam": {
+      "title": "Exam",
+      "description": "Represents an online evaluation/exam with proctoring config",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "courseId": { "type": "string" },
+        "title": { "type": "string" },
+        "duration": { "type": "number" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string" },
+        "subjectText": { "type": "string" },
+        "solutionText": { "type": "string" },
+        "gradingScaleText": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "monitoringConfig": { "type": "object" }
+      },
+      "required": ["id", "courseId", "title", "duration"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "A single question belonging to an exam",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "examId": { "type": "string" },
+        "type": { "type": "string", "enum": ["mcq", "true_false", "matching", "cloze", "numerical", "essay"] },
+        "statement": { "type": "string" },
+        "options": { "type": "array" },
+        "correctAnswer": { "type": "string" },
+        "points": { "type": "number" },
+        "explanation": { "type": "string" }
+      },
+      "required": ["id", "examId", "type", "statement"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "An exam submission by a student",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "examId": { "type": "string" },
+        "answers": { "type": "object" },
+        "score": { "type": "number" },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "gradedAt": { "type": "string", "format": "date-time" },
+        "essayFeedbacks": { "type": "object" }
+      },
+      "required": ["id", "studentId", "examId"]
+    }
+  },
+  "firestore": {
+    "/eduquiz_state/users": {
+      "schema": "User",
+      "description": "User storage node containing the array of user accounts"
+    },
+    "/eduquiz_state/courses": {
+      "schema": "Course",
+      "description": "Course storage node containing the array of active courses"
+    },
+    "/eduquiz_state/enrollments": {
+      "schema": "Enrollment",
+      "description": "Enrollment mapping database list"
+    },
+    "/eduquiz_state/exams": {
+      "schema": "Exam",
+      "description": "Exams list with proctoring specs"
+    },
+    "/eduquiz_state/questions": {
+      "schema": "Question",
+      "description": "Quiz questions indexed by exam"
+    },
+    "/eduquiz_state/submissions": {
+      "schema": "Submission",
+      "description": "Scored submissions that are persistent for revisions"
+    }
+  }
+}

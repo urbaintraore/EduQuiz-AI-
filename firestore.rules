@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Lock down all direct client reads/writes.
+    // The application uses the Express server-side Admin SDK which bypasses security rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

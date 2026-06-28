@@ -1,0 +1,6 @@
+{
+  "name": "EduQuiz AI",
+  "description": "Générateur intelligent d'examens de type Moodle Quiz à partir d'un sujet, d'un corrigé et d'un barème pour enseignants et étudiants.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
