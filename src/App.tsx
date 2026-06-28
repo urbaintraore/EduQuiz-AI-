@@ -50,6 +50,7 @@ import AuthPage from "./components/AuthPage";
 import { AdminDashboard } from "./components/AdminDashboard";
 import Toast, { ToastType } from "./components/Toast";
 import { User, Course, Exam, Question, QuestionType, Submission, MonitoringConfig } from "./types";
+import { getApiUrl } from "./firebase";
 import {
   Radar,
   RadarChart,
@@ -3608,7 +3609,7 @@ export default function App() {
                         </h3>
 
                         <a
-                          href={`/api/exams/${activeExam.id}/moodle-xml`}
+                          href={getApiUrl(`/api/exams/${activeExam.id}/moodle-xml`)}
                           download
                           className="w-full bg-slate-50 border border-slate-200 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 text-xs font-semibold py-2.5 px-3 rounded-xl transition flex items-center justify-between"
                         >
@@ -3620,7 +3621,7 @@ export default function App() {
                         </a>
 
                         <a
-                          href={`/api/exams/${activeExam.id}/export-grades`}
+                          href={getApiUrl(`/api/exams/${activeExam.id}/export-grades`)}
                           download
                           className="w-full bg-slate-50 border border-slate-200 hover:bg-emerald-50 hover:border-emerald-200 text-slate-700 text-xs font-semibold py-2.5 px-3 rounded-xl transition flex items-center justify-between"
                         >
