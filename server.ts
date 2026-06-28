@@ -338,8 +338,14 @@ async function initializeDatabaseState() {
         console.log("✅ Firestore database successfully seeded.");
         return;
       }
-    } catch (e) {
-      console.error("❌ Firestore read error during startup, falling back to local storage:", e);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated")) {
+        console.warn("⚠️ Firestore access permission denied during startup. Disabling cloud sync, falling back to local storage.");
+      } else {
+        console.error("❌ Firestore read error during startup, falling back to local storage:", e);
+      }
+      dbFirestore = null;
     }
   }
 
@@ -405,7 +411,15 @@ function saveDB(db: DBStructure) {
     Promise.all(
       keys.map(key => 
         collRef.doc(key).set({ data: db[key] || [] })
-          .catch(err => console.error(`Failed to sync table '${key}' to Firestore:`, err))
+          .catch(err => {
+            const msg = err?.message || String(err);
+            if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated")) {
+              console.warn(`⚠️ Firestore sync permission denied for key '${key}'. Disabling background Firestore sync to prevent console spam.`);
+              dbFirestore = null;
+            } else {
+              console.error(`Failed to sync table '${key}' to Firestore:`, err);
+            }
+          })
       )
     ).catch(err => {
       console.error("Failed background sync to Firestore:", err);
