@@ -8,7 +8,7 @@ import { Cpu, GraduationCap, Laptop, BookOpen, AlertCircle, ShieldAlert } from "
 import { User, UserRole } from "../types";
 
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
-import { auth as firebaseAuth } from "../firebase";
+import { auth as firebaseAuth, getApiUrl } from "../firebase";
 
 interface AuthPageProps {
   onSuccess: (user: User) => void;
@@ -97,7 +97,7 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
             firebaseUid
           };
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(getApiUrl(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

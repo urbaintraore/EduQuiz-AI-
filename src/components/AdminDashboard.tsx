@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { Shield, Trash2, Users, BookOpen, FileText } from 'lucide-react';
+import { getApiUrl } from '../firebase';
 
 interface AdminDashboardProps {
   user: User;
@@ -19,7 +20,7 @@ export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
   const fetchData = async (tab: string) => {
     setLoading(true);
     try {
-      const resp = await fetch(`/api/admin/${tab}`);
+      const resp = await fetch(getApiUrl(`/api/admin/${tab}`));
       if (resp.ok) {
         const json = await resp.json();
         setData(json);
@@ -35,7 +36,7 @@ export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet élément ?')) return;
     
     try {
-      const resp = await fetch(`/api/admin/${activeTab}/${id}`, {
+      const resp = await fetch(getApiUrl(`/api/admin/${activeTab}/${id}`), {
         method: 'DELETE'
       });
       if (resp.ok) {

@@ -265,35 +265,61 @@ try {
   } 
   
   // 2. Next try our AI Studio provisioned config file
+  let useSandbox = false;
   if (!appInitialized) {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    let projectId = "eduquiz-632c5"; // Default to user's project
+    
+    // Detect if we are running in the AI Studio sandbox container
+    const isSandboxContainer = !process.env.FIREBASE_SERVICE_ACCOUNT && 
+                               (process.env.GOOGLE_CLOUD_PROJECT === "yodeling-magpie-607pf" || 
+                                (process.env.K_SERVICE && !process.env.VERCEL));
+
     if (fs.existsSync(configPath)) {
       try {
         const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (config.projectId) {
-          if (getApps().length === 0) {
-            initializeApp({
-              projectId: config.projectId
-            });
-          }
-          appInitialized = true;
-          console.log("🔥 Firebase Admin initialized successfully for project:", config.projectId);
+        if (isSandboxContainer) {
+          projectId = "yodeling-magpie-607pf";
+          useSandbox = true;
+          console.log("🛠️ AI Studio sandbox container detected. Using sandboxed project ID: yodeling-magpie-607pf");
+        } else if (config.projectId) {
+          projectId = config.projectId;
+          console.log("🌐 External/Vercel environment. Using project ID from config:", projectId);
         }
       } catch (e) {
-        console.error("❌ Failed to initialize from firebase-applet-config.json:", e);
+        console.error("❌ Failed to parse config file:", e);
       }
+    }
+    
+    try {
+      if (getApps().length === 0) {
+        initializeApp({
+          projectId: projectId
+        });
+      }
+      appInitialized = true;
+      console.log("🔥 Firebase Admin initialized successfully for project:", projectId);
+    } catch (e) {
+      console.error("❌ Failed to initialize Firebase Admin:", e);
     }
   }
 
   // Set up firestore if app was initialized
   if (appInitialized) {
+    let dbId = "(default)"; // Default to user's database ID
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    let dbId = "(default)";
     if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (config.firestoreDatabaseId) dbId = config.firestoreDatabaseId;
+        try {
+          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          if (useSandbox) {
+            dbId = "ai-studio-eduquizai-495bc204-9e63-4640-903e-b91ff9e217ca";
+          } else if (config.firestoreDatabaseId) {
+            dbId = config.firestoreDatabaseId;
+          }
+        } catch (_) {}
     }
     dbFirestore = getFirestore(getApp(), dbId);
+    console.log("🔥 Firestore initialized using Database ID:", dbId);
   } else {
     console.warn("⚠️ Warning: No Firebase credentials found. Falling back to local db.json storage.");
   }
