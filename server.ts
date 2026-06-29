@@ -374,13 +374,14 @@ async function initializeDatabaseState() {
       const loadedData: Partial<DBStructure> = {};
       let hasData = false;
 
-      // Load all keys in parallel with a 2-second timeout to prevent hanging the server startup
-      const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout: Firestore request took more than 2000ms")), 2000)
+      // Wrap the entire sync and seed logic in a 2500ms timeout
+      const syncTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout: Firestore operation exceeded 2500ms")), 2500)
       );
 
-      await Promise.race([
-        Promise.all(
+      const syncAndSeedPromise = (async () => {
+        // Load all keys in parallel
+        await Promise.all(
           keys.map(async (key) => {
             const docSnap = await collRef.doc(key).get();
             if (docSnap.exists) {
@@ -390,37 +391,37 @@ async function initializeDatabaseState() {
               loadedData[key] = INITIAL_DB[key];
             }
           })
-        ),
-        timeoutPromise
-      ]);
-
-      if (hasData) {
-        dbMemory = loadedData as DBStructure;
-        try {
-          fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
-        } catch (_) {}
-        console.log("✅ Synced successfully from Firestore in parallel! Database cache established.");
-        return;
-      } else {
-        console.log("🆕 Firestore is empty. Seeding initial mockup database in parallel...");
-        dbMemory = { ...INITIAL_DB };
-        
-        await Promise.all(
-          keys.map(key => collRef.doc(key).set({ data: INITIAL_DB[key] }))
         );
-        
-        try {
-          fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
-        } catch (_) {}
-        console.log("✅ Firestore database successfully seeded in parallel.");
-        return;
-      }
+
+        if (hasData) {
+          dbMemory = loadedData as DBStructure;
+          try {
+            fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
+          } catch (_) {}
+          console.log("✅ Synced successfully from Firestore in parallel! Database cache established.");
+        } else {
+          console.log("🆕 Firestore is empty. Seeding initial mockup database in parallel...");
+          dbMemory = { ...INITIAL_DB };
+          
+          await Promise.all(
+            keys.map(key => collRef.doc(key).set({ data: INITIAL_DB[key] }))
+          );
+          
+          try {
+            fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
+          } catch (_) {}
+          console.log("✅ Firestore database successfully seeded in parallel.");
+        }
+      })();
+
+      await Promise.race([syncAndSeedPromise, syncTimeout]);
+      return;
     } catch (e: any) {
       const msg = e?.message || String(e);
       if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated") || msg.includes("credential") || msg.includes("Timeout")) {
         console.warn("⚠️ Firestore access permission denied or timed out during startup. Disabling cloud sync, falling back to local storage.");
       } else {
-        console.error("❌ Firestore read error during startup, falling back to local storage:", e);
+        console.error("❌ Firestore read/write error during startup, falling back to local storage:", e);
       }
       dbFirestore = null;
     }
