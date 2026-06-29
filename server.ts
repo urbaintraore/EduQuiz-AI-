@@ -8,7 +8,6 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { initializeApp, getApps, getApp, cert } from "firebase-admin/app";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
@@ -261,9 +260,23 @@ const INITIAL_DB: DBStructure = {
 let dbFirestore: Firestore | null = null;
 try {
   let appInitialized = false;
+  let useSandbox = false;
+
+  const isSandboxContainer = !process.env.FIREBASE_SERVICE_ACCOUNT && 
+                             (process.env.GOOGLE_CLOUD_PROJECT === "yodeling-magpie-607pf" || 
+                              (process.env.K_SERVICE && !process.env.VERCEL));
+  
+  if (isSandboxContainer) {
+    useSandbox = true;
+  }
+
+  // If already initialized (warm start), we are set
+  if (getApps().length > 0) {
+    appInitialized = true;
+  }
   
   // 1. First try FIREBASE_SERVICE_ACCOUNT base64 from environment
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  if (!appInitialized && process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {
       let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT;
       if (!serviceAccountStr.trim().startsWith('{')) {
@@ -284,22 +297,15 @@ try {
   } 
   
   // 2. Next try our AI Studio provisioned config file
-  let useSandbox = false;
   if (!appInitialized) {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     let projectId = "eduquiz-632c5"; // Default to user's project
-    
-    // Detect if we are running in the AI Studio sandbox container
-    const isSandboxContainer = !process.env.FIREBASE_SERVICE_ACCOUNT && 
-                               (process.env.GOOGLE_CLOUD_PROJECT === "yodeling-magpie-607pf" || 
-                                (process.env.K_SERVICE && !process.env.VERCEL));
 
     if (fs.existsSync(configPath)) {
       try {
         const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (isSandboxContainer) {
+        if (useSandbox) {
           projectId = "yodeling-magpie-607pf";
-          useSandbox = true;
           console.log("🛠️ AI Studio sandbox container detected. Using sandboxed project ID: yodeling-magpie-607pf");
         } else if (config.projectId) {
           projectId = config.projectId;
@@ -368,18 +374,25 @@ async function initializeDatabaseState() {
       const loadedData: Partial<DBStructure> = {};
       let hasData = false;
 
-      // Load all keys in parallel
-      await Promise.all(
-        keys.map(async (key) => {
-          const docSnap = await collRef.doc(key).get();
-          if (docSnap.exists) {
-            loadedData[key] = docSnap.data()?.data || [];
-            hasData = true;
-          } else {
-            loadedData[key] = INITIAL_DB[key];
-          }
-        })
+      // Load all keys in parallel with a 2-second timeout to prevent hanging the server startup
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout: Firestore request took more than 2000ms")), 2000)
       );
+
+      await Promise.race([
+        Promise.all(
+          keys.map(async (key) => {
+            const docSnap = await collRef.doc(key).get();
+            if (docSnap.exists) {
+              loadedData[key] = docSnap.data()?.data || [];
+              hasData = true;
+            } else {
+              loadedData[key] = INITIAL_DB[key];
+            }
+          })
+        ),
+        timeoutPromise
+      ]);
 
       if (hasData) {
         dbMemory = loadedData as DBStructure;
@@ -404,8 +417,8 @@ async function initializeDatabaseState() {
       }
     } catch (e: any) {
       const msg = e?.message || String(e);
-      if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated") || msg.includes("credential")) {
-        console.warn("⚠️ Firestore access permission denied during startup. Disabling cloud sync, falling back to local storage.");
+      if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated") || msg.includes("credential") || msg.includes("Timeout")) {
+        console.warn("⚠️ Firestore access permission denied or timed out during startup. Disabling cloud sync, falling back to local storage.");
       } else {
         console.error("❌ Firestore read error during startup, falling back to local storage:", e);
       }
@@ -2303,6 +2316,16 @@ app.delete("/api/admin/exams/:id", (req, res) => {
   res.json({ success: true });
 });
 
+// Robust Error Handling Middleware to catch any unexpected runtime crashes
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("🚨 UNHANDLED SERVER EXCEPTION DETECTED:", err);
+  res.status(500).json({
+    error: "Une erreur interne du serveur est survenue.",
+    message: err?.message || String(err),
+    stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
+  });
+});
+
 // --- CLIENT-SIDE VITE PIPELINE AND DEV RUNNER ---
 
 const startServer = async () => {
@@ -2310,7 +2333,8 @@ const startServer = async () => {
   await initializeDatabaseState();
 
   // Vite setup for development asset compiling & livereload
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
