@@ -275,57 +275,64 @@ try {
     appInitialized = true;
   }
   
-  // 1. First try FIREBASE_SERVICE_ACCOUNT base64 from environment
-  if (!appInitialized && process.env.FIREBASE_SERVICE_ACCOUNT) {
-    try {
-      let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT;
-      if (!serviceAccountStr.trim().startsWith('{')) {
-        serviceAccountStr = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
-      }
-      const serviceAccount = JSON.parse(serviceAccountStr);
-      if (getApps().length === 0) {
-        initializeApp({
-          credential: cert(serviceAccount),
-          projectId: serviceAccount.project_id
-        });
-        appInitialized = true;
-        console.log("🔥 Firebase Admin initialized via Service Account for project:", serviceAccount.project_id);
-      }
-    } catch (e) {
-      console.error("⚠️ Failed to parse FIREBASE_SERVICE_ACCOUNT as JSON, falling back:", e);
-    }
-  } 
-  
-  // 2. Next try our AI Studio provisioned config file
-  if (!appInitialized) {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    let projectId = "eduquiz-632c5"; // Default to user's project
-
-    if (fs.existsSync(configPath)) {
+  // If running on Vercel and no Service Account is provided, bypass Firestore initialization completely to prevent network timeouts/hangs
+  const isVercelWithoutCredentials = !!(process.env.VERCEL && !process.env.FIREBASE_SERVICE_ACCOUNT);
+  if (isVercelWithoutCredentials) {
+    console.warn("⚠️ Running on Vercel without FIREBASE_SERVICE_ACCOUNT. Disabling Firestore to prevent connection timeouts.");
+    appInitialized = false;
+  } else {
+    // 1. First try FIREBASE_SERVICE_ACCOUNT base64 from environment
+    if (!appInitialized && process.env.FIREBASE_SERVICE_ACCOUNT) {
       try {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (useSandbox) {
-          projectId = "yodeling-magpie-607pf";
-          console.log("🛠️ AI Studio sandbox container detected. Using sandboxed project ID: yodeling-magpie-607pf");
-        } else if (config.projectId) {
-          projectId = config.projectId;
-          console.log("🌐 External/Vercel environment. Using project ID from config:", projectId);
+        let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT;
+        if (!serviceAccountStr.trim().startsWith('{')) {
+          serviceAccountStr = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
+        }
+        const serviceAccount = JSON.parse(serviceAccountStr);
+        if (getApps().length === 0) {
+          initializeApp({
+            credential: cert(serviceAccount),
+            projectId: serviceAccount.project_id
+          });
+          appInitialized = true;
+          console.log("🔥 Firebase Admin initialized via Service Account for project:", serviceAccount.project_id);
         }
       } catch (e) {
-        console.error("❌ Failed to parse config file:", e);
+        console.error("⚠️ Failed to parse FIREBASE_SERVICE_ACCOUNT as JSON, falling back:", e);
       }
-    }
+    } 
     
-    try {
-      if (getApps().length === 0) {
-        initializeApp({
-          projectId: projectId
-        });
+    // 2. Next try our AI Studio provisioned config file
+    if (!appInitialized) {
+      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+      let projectId = "eduquiz-632c5"; // Default to user's project
+
+      if (fs.existsSync(configPath)) {
+        try {
+          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          if (useSandbox) {
+            projectId = "yodeling-magpie-607pf";
+            console.log("🛠️ AI Studio sandbox container detected. Using sandboxed project ID: yodeling-magpie-607pf");
+          } else if (config.projectId) {
+            projectId = config.projectId;
+            console.log("🌐 External/Vercel environment. Using project ID from config:", projectId);
+          }
+        } catch (e) {
+          console.error("❌ Failed to parse config file:", e);
+        }
       }
-      appInitialized = true;
-      console.log("🔥 Firebase Admin initialized successfully for project:", projectId);
-    } catch (e) {
-      console.error("❌ Failed to initialize Firebase Admin:", e);
+      
+      try {
+        if (getApps().length === 0) {
+          initializeApp({
+            projectId: projectId
+          });
+        }
+        appInitialized = true;
+        console.log("🔥 Firebase Admin initialized successfully for project:", projectId);
+      } catch (e) {
+        console.error("❌ Failed to initialize Firebase Admin:", e);
+      }
     }
   }
 
@@ -2329,11 +2336,20 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 // --- CLIENT-SIDE VITE PIPELINE AND DEV RUNNER ---
 
+// Register production static files synchronously at load time for robust serverless performance
+if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+  const distPath = path.join(process.cwd(), "dist");
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+}
+
 const startServer = async () => {
   // Warm up Firestore database state
   await initializeDatabaseState();
 
-  // Vite setup for development asset compiling & livereload
+  // Vite setup for development asset compiling & livereload (local development only)
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -2341,12 +2357,6 @@ const startServer = async () => {
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
   }
 
   if (!process.env.VERCEL) {
@@ -2357,8 +2367,12 @@ const startServer = async () => {
   }
 };
 
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-});
+// In Vercel serverless environments, we export 'app' without calling 'startServer()' synchronously.
+// The database lazy-initialization middleware will automatically set up dbMemory on the first API request.
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error("Failed to start server:", err);
+  });
+}
 
 export default app;
