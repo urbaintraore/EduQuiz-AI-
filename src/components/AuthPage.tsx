@@ -101,8 +101,6 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      }).catch(err => {
-        throw new Error("L'API locale n'est pas joignable: " + err.message);
       });
 
       const data = await response.json();

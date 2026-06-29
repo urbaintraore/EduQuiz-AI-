@@ -33,8 +33,13 @@ const Tesseract = getCallable(tesseractModule);
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = typeof window === "undefined" && typeof import.meta?.url === "string"
+  ? fileURLToPath(import.meta.url)
+  : "";
+
+const __dirname = typeof window === "undefined" && __filename
+  ? path.dirname(__filename)
+  : "";
 
 const app = express();
 const PORT = 3000;
@@ -347,7 +352,7 @@ let dbMemory: DBStructure | null = null;
 async function initializeDatabaseState() {
   if (dbFirestore) {
     try {
-      console.log("📥 Syncing database with Firestore...");
+      console.log("📥 Syncing database with Firestore (parallel format)...");
       const collRef = dbFirestore.collection("eduquiz_state");
       const keys: (keyof DBStructure)[] = [
         "users",
@@ -363,35 +368,43 @@ async function initializeDatabaseState() {
       const loadedData: Partial<DBStructure> = {};
       let hasData = false;
 
-      for (const key of keys) {
-        const docSnap = await collRef.doc(key).get();
-        if (docSnap.exists) {
-          loadedData[key] = docSnap.data()?.data || [];
-          hasData = true;
-        } else {
-          loadedData[key] = INITIAL_DB[key];
-        }
-      }
+      // Load all keys in parallel
+      await Promise.all(
+        keys.map(async (key) => {
+          const docSnap = await collRef.doc(key).get();
+          if (docSnap.exists) {
+            loadedData[key] = docSnap.data()?.data || [];
+            hasData = true;
+          } else {
+            loadedData[key] = INITIAL_DB[key];
+          }
+        })
+      );
 
       if (hasData) {
         dbMemory = loadedData as DBStructure;
         try {
           fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
         } catch (_) {}
-        console.log("✅ Synced successfully from Firestore! Database cache established.");
+        console.log("✅ Synced successfully from Firestore in parallel! Database cache established.");
         return;
       } else {
-        console.log("🆕 Firestore is empty. Seeding initial mockup database...");
-        for (const key of keys) {
-          await collRef.doc(key).set({ data: INITIAL_DB[key] });
-        }
+        console.log("🆕 Firestore is empty. Seeding initial mockup database in parallel...");
         dbMemory = { ...INITIAL_DB };
-        console.log("✅ Firestore database successfully seeded.");
+        
+        await Promise.all(
+          keys.map(key => collRef.doc(key).set({ data: INITIAL_DB[key] }))
+        );
+        
+        try {
+          fs.writeFileSync(DB_FILE, JSON.stringify(dbMemory, null, 2), "utf8");
+        } catch (_) {}
+        console.log("✅ Firestore database successfully seeded in parallel.");
         return;
       }
     } catch (e: any) {
       const msg = e?.message || String(e);
-      if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated")) {
+      if (msg.includes("PERMISSION_DENIED") || msg.includes("permission-denied") || msg.includes("unauthenticated") || msg.includes("credential")) {
         console.warn("⚠️ Firestore access permission denied during startup. Disabling cloud sync, falling back to local storage.");
       } else {
         console.error("❌ Firestore read error during startup, falling back to local storage:", e);

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence } from "firebase/auth";
@@ -5,13 +7,13 @@ import { getFirestore } from "firebase/firestore";
 import firebaseAppletConfig from '../firebase-applet-config.json';
 
 const firebaseConfig = {
-  apiKey: firebaseAppletConfig.apiKey,
-  authDomain: firebaseAppletConfig.authDomain,
-  projectId: firebaseAppletConfig.projectId,
-  storageBucket: firebaseAppletConfig.storageBucket,
-  messagingSenderId: firebaseAppletConfig.messagingSenderId,
-  appId: firebaseAppletConfig.appId,
-  measurementId: firebaseAppletConfig.measurementId
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId
 };
 
 // Initialize Firebase
@@ -26,24 +28,8 @@ setPersistence(auth, browserLocalPersistence).catch(() => {
 
 export const db = getFirestore(app, firebaseAppletConfig.firestoreDatabaseId || "(default)");
 
-// Helper to resolve API urls dynamically for external deployments (such as Vercel)
-export const getApiUrl = (path: string): string => {
-  if (path.startsWith("/api/")) {
-    const isLocalOrRunApp = typeof window !== 'undefined' && (
-      window.location.hostname === "localhost" || 
-      window.location.hostname === "127.0.0.1" || 
-      window.location.hostname.endsWith("run.app") ||
-      (window.location.hostname.endsWith("vercel.app") && !(import.meta as any).env.VITE_API_URL)
-    );
-                            
-    if (!isLocalOrRunApp) {
-      const apiBase = (import.meta as any).env.VITE_API_URL || "https://ais-pre-mrwnyy47wnvgmlqqtnsin5-100691965662.europe-west2.run.app";
-      const cleanBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
-      return `${cleanBase}${path}`;
-    }
-  }
-  return path;
-};
+import { getApiUrl } from "./config/api";
+export { getApiUrl };
 
 // Global interceptor for relative fetch calls
 if (typeof window !== 'undefined') {
@@ -61,37 +47,62 @@ if (typeof window !== 'undefined') {
         urlStr = (input as any).url || "";
       }
 
+      // If the URL is a relative API path, resolve it using getApiUrl
       if (urlStr.startsWith("/api/")) {
-        const isLocalOrRunApp = window.location.hostname === "localhost" || 
-                                window.location.hostname === "127.0.0.1" || 
-                                window.location.hostname.endsWith("run.app") ||
-                                (window.location.hostname.endsWith("vercel.app") && !(import.meta as any).env.VITE_API_URL);
-                                
-        if (!isLocalOrRunApp) {
-          const apiBase = (import.meta as any).env.VITE_API_URL || "https://ais-pre-mrwnyy47wnvgmlqqtnsin5-100691965662.europe-west2.run.app";
-          const cleanBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
-          urlStr = `${cleanBase}${urlStr}`;
-          
-          if (typeof input === "string") {
-            return originalFetch(urlStr, init);
-          } else if (input instanceof URL) {
-            return originalFetch(new URL(urlStr), init);
+        const resolvedUrl = getApiUrl(urlStr);
+        try {
+          let response: Response;
+          if (resolvedUrl !== urlStr) {
+            if (typeof input === "string") {
+              response = await originalFetch(resolvedUrl, init);
+            } else if (input instanceof URL) {
+              response = await originalFetch(new URL(resolvedUrl), init);
+            } else {
+              const newRequest = new Request(resolvedUrl, {
+                method: input.method,
+                headers: input.headers,
+                body: input.body,
+                mode: input.mode,
+                credentials: input.credentials,
+                cache: input.cache,
+                redirect: input.redirect,
+                referrer: input.referrer,
+                integrity: input.integrity,
+                keepalive: input.keepalive,
+                signal: input.signal,
+              });
+              response = await originalFetch(newRequest, init);
+            }
           } else {
-            const newRequest = new Request(urlStr, {
-              method: input.method,
-              headers: input.headers,
-              body: input.body,
-              mode: input.mode,
-              credentials: input.credentials,
-              cache: input.cache,
-              redirect: input.redirect,
-              referrer: input.referrer,
-              integrity: input.integrity,
-              keepalive: input.keepalive,
-              signal: input.signal,
-            });
-            return originalFetch(newRequest, init);
+            response = await originalFetch(input, init);
           }
+
+          if (!response.ok) {
+            console.warn(`⚠️ API Error on ${resolvedUrl}: HTTP ${response.status} ${response.statusText}`);
+          }
+          return response;
+        } catch (err: any) {
+          const errorMsg = err?.message || String(err);
+          let statusText = "Erreur Réseau (Network Error)";
+          let cause = "Le serveur de l'API est injoignable, ou la requête a été bloquée par le navigateur (CORS/SSL/Incompatibilité).";
+          let solution = "1. Vérifiez que votre connexion internet est active.\n2. Si vous êtes sur Vercel, assurez-vous que les variables d'environnement (comme FIREBASE_SERVICE_ACCOUNT) sont correctement configurées dans la console Vercel.\n3. Vérifiez les logs de la fonction serverless sur Vercel pour identifier un crash au démarrage.";
+          
+          if (resolvedUrl.includes("localhost") || resolvedUrl.includes("127.0.0.1")) {
+            cause = "L'application tente de contacter un serveur local (localhost), mais aucun serveur ne tourne localement sur le port configuré.";
+            solution = "Démarrez votre serveur local avec 'npm run dev', ou configurez la variable d'environnement VITE_API_URL dans votre déploiement de production pour pointer vers votre backend en ligne.";
+          } else if (resolvedUrl.startsWith("https://ais-pre-")) {
+            cause = "L'application tente de contacter l'environnement de prévisualisation temporaire d'AI Studio, mais celui-ci est actuellement arrêté ou inaccessible.";
+            solution = "Si l'application est déployée en production (sur Vercel), elle devrait utiliser des routes relatives (/api/...) ou avoir une variable d'environnement VITE_API_URL configurée vers sa propre API de production.";
+          }
+
+          const detailedMessage = `🚨 Impossible de joindre l'API :
+• URL appelée : ${resolvedUrl}
+• Détail technique : ${errorMsg}
+• Cause probable : ${cause}
+• Solution proposée : ${solution}`;
+
+          console.error(detailedMessage);
+          throw new Error(detailedMessage);
         }
       }
 
