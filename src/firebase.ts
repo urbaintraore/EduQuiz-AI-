@@ -32,7 +32,8 @@ export const getApiUrl = (path: string): string => {
     const isLocalOrRunApp = typeof window !== 'undefined' && (
       window.location.hostname === "localhost" || 
       window.location.hostname === "127.0.0.1" || 
-      window.location.hostname.endsWith("run.app")
+      window.location.hostname.endsWith("run.app") ||
+      (window.location.hostname.endsWith("vercel.app") && !(import.meta as any).env.VITE_API_URL)
     );
                             
     if (!isLocalOrRunApp) {
@@ -63,7 +64,8 @@ if (typeof window !== 'undefined') {
       if (urlStr.startsWith("/api/")) {
         const isLocalOrRunApp = window.location.hostname === "localhost" || 
                                 window.location.hostname === "127.0.0.1" || 
-                                window.location.hostname.endsWith("run.app");
+                                window.location.hostname.endsWith("run.app") ||
+                                (window.location.hostname.endsWith("vercel.app") && !(import.meta as any).env.VITE_API_URL);
                                 
         if (!isLocalOrRunApp) {
           const apiBase = (import.meta as any).env.VITE_API_URL || "https://ais-pre-mrwnyy47wnvgmlqqtnsin5-100691965662.europe-west2.run.app";

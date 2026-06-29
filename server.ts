@@ -56,7 +56,21 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
-const DB_FILE = path.join(process.cwd(), "db.json");
+const DB_FILE = process.env.VERCEL 
+  ? path.join("/tmp", "db.json") 
+  : path.join(process.cwd(), "db.json");
+
+// Lazy database initialization middleware
+app.use(async (req, res, next) => {
+  try {
+    if (!dbMemory) {
+      await initializeDatabaseState();
+    }
+  } catch (err) {
+    console.error("Error during lazy database initialization:", err);
+  }
+  next();
+});
 
 // Define structure for our local database
 interface DBStructure {
@@ -389,6 +403,18 @@ async function initializeDatabaseState() {
   // Local fallback
   try {
     if (!fs.existsSync(DB_FILE)) {
+      const rootDbPath = path.join(process.cwd(), "db.json");
+      if (fs.existsSync(rootDbPath)) {
+        try {
+          fs.copyFileSync(rootDbPath, DB_FILE);
+          console.log("📝 Seeded /tmp/db.json from project root db.json");
+        } catch (copyErr) {
+          console.error("Failed to copy db.json to /tmp:", copyErr);
+        }
+      }
+    }
+
+    if (!fs.existsSync(DB_FILE)) {
       fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), "utf8");
       dbMemory = { ...INITIAL_DB };
     } else {
@@ -408,6 +434,14 @@ function getDB(): DBStructure {
     return dbMemory;
   }
   try {
+    if (!fs.existsSync(DB_FILE)) {
+      const rootDbPath = path.join(process.cwd(), "db.json");
+      if (fs.existsSync(rootDbPath)) {
+        try {
+          fs.copyFileSync(rootDbPath, DB_FILE);
+        } catch (_) {}
+      }
+    }
     if (!fs.existsSync(DB_FILE)) {
       fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), "utf8");
       dbMemory = { ...INITIAL_DB };
@@ -2277,12 +2311,16 @@ const startServer = async () => {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 EduQuiz AI server booting securely on port ${PORT}`);
-    console.log(`🔗 Running dev server at http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 EduQuiz AI server booting securely on port ${PORT}`);
+      console.log(`🔗 Running dev server at http://localhost:${PORT}`);
+    });
+  }
 };
 
 startServer().catch((err) => {
   console.error("Failed to start server:", err);
 });
+
+export default app;
