@@ -1,0 +1,203 @@
+{
+  "users": [
+    {
+      "id": "usr_admin",
+      "role": "admin",
+      "email": "admin@eduquiz.fr",
+      "password": "password123",
+      "university": "Administration",
+      "schoolClass": ""
+    },
+    {
+      "id": "usr_teacher",
+      "role": "teacher",
+      "email": "enseignant@eduquiz.fr",
+      "password": "password123",
+      "university": "Université Sorbonne Nouvelle",
+      "schoolClass": ""
+    },
+    {
+      "id": "usr_student",
+      "role": "student",
+      "email": "etudiant@eduquiz.fr",
+      "password": "password123",
+      "university": "Université Sorbonne Nouvelle",
+      "schoolClass": "M1 Informatique - IA"
+    },
+    {
+      "id": "usr_xqr36gwn7",
+      "email": "test_teacher@test.com",
+      "password": "password",
+      "role": "teacher",
+      "university": "Université d'études",
+      "schoolClass": ""
+    },
+    {
+      "id": "usr_jetzt0u4u",
+      "email": "student1@test.com",
+      "password": "test",
+      "role": "student",
+      "university": "Université d'études",
+      "schoolClass": "L1"
+    },
+    {
+      "id": "usr_f2mbtv3mf",
+      "email": "audit@test.com",
+      "password": "password",
+      "role": "teacher",
+      "university": "Université d'études",
+      "schoolClass": ""
+    }
+  ],
+  "courses": [
+    {
+      "id": "crs_ia",
+      "teacherId": "usr_teacher",
+      "title": "Algorithmique & Intelligence Artificielle 101",
+      "description": "Introduction aux concepts de base de l'informatique théorique et de la recherche IA.",
+      "code": "IA2026"
+    }
+  ],
+  "enrollments": [
+    {
+      "studentId": "usr_student",
+      "courseId": "crs_ia",
+      "enrolledAt": "2026-06-26T10:06:50.437Z"
+    }
+  ],
+  "exams": [
+    {
+      "id": "exm_demo",
+      "courseId": "crs_ia",
+      "title": "Devoir Survélé sur l'IA et les Réseaux de Neurones",
+      "duration": 30,
+      "startDate": "2026-06-30T10:06:50.437Z",
+      "status": "published",
+      "subjectText": "Sujet sur les réseaux de neurones artificiels, le deep learning, l'architecture transformeur et la descente de gradient.",
+      "solutionText": "Directives de correction détaillées fournies par le professeur.",
+      "gradingScaleText": "Barème indicatif: QCM (2pts), Vrai/Faux (2pts), Appariement (3pts), Question ouverte (5pts)",
+      "createdAt": "2026-06-29T10:06:50.437Z",
+      "monitoringConfig": {
+        "active": true,
+        "requireCamera": false,
+        "periodicCaptures": false,
+        "detectNoFace": false,
+        "detectMultipleFaces": false,
+        "requireScreenShare": true,
+        "monitorWindowBlur": true,
+        "monitorTabChange": true,
+        "monitorFullscreenExit": true,
+        "preventCopyPaste": true,
+        "preventRightClick": true,
+        "preventShortcuts": true,
+        "requireMicrophone": false,
+        "detectAbnormalNoise": false,
+        "detectConversation": false,
+        "thresholdTabChanges": 3,
+        "thresholdFullscreenExits": 2,
+        "thresholdNoFaceTime": 30,
+        "alertScoreThreshold": 50
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "q_1",
+      "examId": "exm_demo",
+      "type": "mcq",
+      "statement": "Quelle fonction d'activation est couramment utilisée pour introduire de la non-linéarité dans les réseaux multicouches en évitant la saturation rapide ?",
+      "options": [
+        "Sigmoïde",
+        "ReLU (Rectified Linear Unit)",
+        "Tangente Hyperbolique",
+        "Identité linéaire"
+      ],
+      "correctAnswer": "ReLU (Rectified Linear Unit)",
+      "points": 2,
+      "explanation": "ReLU retourne max(0, x), ce qui évite la saturation pour des entrées positives et accélère l'apprentissage en préservant le gradient."
+    },
+    {
+      "id": "q_2",
+      "examId": "exm_demo",
+      "type": "true_false",
+      "statement": "La rétropropagation du gradient (backpropagation) calcule les dérivées de la fonction de coût par rapport aux poids en partant de la couche d'entrée vers la couche de sortie.",
+      "correctAnswer": "false",
+      "points": 2,
+      "explanation": "Faux. Elle se fait dans le sens inverse : de la couche de sortie vers l'entrée (d'où le nom de rétropropagation)."
+    },
+    {
+      "id": "q_3",
+      "examId": "exm_demo",
+      "type": "matching",
+      "statement": "Associez chaque concept d'apprentissage profond à son rôle principal.",
+      "options": [
+        "Descente de gradient",
+        "Précision d'évaluation",
+        "Architecture Transformer",
+        "Fonction de perte"
+      ],
+      "matchingTargets": [
+        "Optimisation des poids",
+        "Mesure du taux de réussite",
+        "Mécanisme d'attention",
+        "Écart prédiction-réalité"
+      ],
+      "correctAnswer": "Optimisation des poids",
+      "points": 3,
+      "explanation": "Descente de gradient -> Optimisation, Transformer -> Attention, Fonction de perte -> Écart."
+    },
+    {
+      "id": "q_4",
+      "examId": "exm_demo",
+      "type": "cloze",
+      "statement": "Le composant central des Transformers qui leur permet de traiter tous les mots d'une phrase en parallèle s'appelle le mécanisme d'{attention_visuelle|attention|auto-attention}.",
+      "correctAnswer": "attention",
+      "points": 3,
+      "explanation": "Le mécanisme d'attention (ou auto-attention) capture les dependances à longue distance de manière hautement parallélisable."
+    },
+    {
+      "id": "q_5",
+      "examId": "exm_demo",
+      "type": "numerical",
+      "statement": "Si une couche d'entrée a 3 neurones et que la couche suivante (complètement connectée) en contient 4, combien de biais individuels (bias) possèdera au total cette seconde couche ?",
+      "correctAnswer": "4",
+      "points": 2,
+      "explanation": "Chaque neurone de la couche de destination possède exactement un biais independant, donc 4 biais."
+    },
+    {
+      "id": "q_6",
+      "examId": "exm_demo",
+      "type": "essay",
+      "statement": "Expliquez l'intérêt majeur de l'algorithme d'optimisation de descente de gradient stochastique (SGD) par rapport à la descente de gradient classique (Batch Gradient Descent) sur d'immenses volumes de données.",
+      "correctAnswer": "Le SGD calcule le gradient sur un seul échantillon ou mini-lot à la fois, évitant ainsi de charger des millions d'entrées en mémoire à chaque pas.",
+      "points": 6,
+      "explanation": "Le SGD évite la saturation mémoire et propose une convergence souvent plus rapide grâce au bruit intrinsèque du mini-lot."
+    }
+  ],
+  "submissions": [
+    {
+      "id": "sub_demo_1",
+      "studentId": "usr_student",
+      "examId": "exm_demo",
+      "answers": {
+        "q_1": "ReLU (Rectified Linear Unit)",
+        "q_2": "false",
+        "q_3": "{\"Descente de gradient\":\"Optimisation des poids\",\"Précision d'évaluation\":\"Mesure du taux de réussite\",\"Architecture Transformer\":\"Mécanisme d'attention\",\"Fonction de perte\":\"Écart prédiction-réalité\"}",
+        "q_4": "attention",
+        "q_5": "4",
+        "q_6": "SGD permet de faire des mises à jour des poids beaucoup plus fréquemment sans avoir à stocker tout le dataset lourd. C'est idéal pour le Big Data car cela requiert beaucoup moins de mémoire vive."
+      },
+      "score": 18,
+      "submittedAt": "2026-06-29T06:06:50.437Z",
+      "gradedAt": "2026-06-29T06:36:50.437Z",
+      "essayFeedbacks": {
+        "q_6": {
+          "score": 6,
+          "comment": "Excellente réponse claire et précise."
+        }
+      }
+    }
+  ],
+  "monitoringEvents": [],
+  "monitoringReports": []
+}

@@ -1,10 +1,10 @@
 {
-  "projectId": "eduquiz-632c5",
-  "appId": "1:277340952865:web:5ba8f823c5f098df3b8660",
-  "apiKey": "AIzaSyADqChNx_jYCJ17dYw5lpzf_4CMeLgcA3g",
-  "authDomain": "eduquiz-632c5.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
-  "storageBucket": "eduquiz-632c5.firebasestorage.app",
-  "messagingSenderId": "277340952865",
-  "measurementId": "G-W6RMGBFCH3"
+  "projectId": "yodeling-magpie-607pf",
+  "appId": "1:197141426230:web:eaafb14b6550c679736897",
+  "apiKey": "AIzaSyAatXFRfR-Eea2Uf8zsmVWniXpg3n2nwwQ",
+  "authDomain": "yodeling-magpie-607pf.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-eduquizai-495bc204-9e63-4640-903e-b91ff9e217ca",
+  "storageBucket": "yodeling-magpie-607pf.firebasestorage.app",
+  "messagingSenderId": "197141426230",
+  "measurementId": ""
 }

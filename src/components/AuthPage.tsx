@@ -60,28 +60,26 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
     try {
       let firebaseUid = null;
       try {
-        if (isLogin) {
-          // Attempt Firebase login first
-          const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
-          firebaseUid = userCredential.user.uid;
-        } else {
-          // Attempt Firebase register first
-          const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-          firebaseUid = userCredential.user.uid;
+        if (firebaseAuth) {
+          if (isLogin) {
+            // Attempt Firebase login first
+            const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
+            firebaseUid = userCredential.user.uid;
+          } else {
+            // Attempt Firebase register first
+            const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+            firebaseUid = userCredential.user.uid;
+          }
         }
       } catch (fbError: any) {
-        console.warn("Firebase Auth Error:", fbError);
-        
+        // We gracefully fallback to local auth if Firebase fails (e.g., invalid API key, iframe constraints)
+        // We only throw if it's a specific user-facing error like wrong password when they actually exist in Firebase
         if (fbError.code === "auth/email-already-in-use") {
             throw new Error("Cet email est déjà utilisé sur Firebase. Essayez de vous connecter.");
         } else if (fbError.code === "auth/wrong-password" || fbError.code === "auth/user-not-found" || fbError.code === "auth/invalid-credential") {
-            throw new Error("Identifiants Firebase invalides.");
-        } else if (fbError.code === "auth/network-request-failed") {
-            // Dans le mode aperçu (iframe), Firebase Auth peut être bloqué.
-            console.warn("Network request failed - possibly due to iframe constraints. Proceeding with local auth.");
-        } else {
-            // Pour toute autre erreur Firebase (ex: configuration non activée, etc.), on procède avec l'authentification locale pour assurer la robustesse.
-            console.warn("Firebase authentication skipped/failed, proceeding with local auth fallback: ", fbError.message);
+            // If they are strictly using Firebase and have the wrong password, we should probably let them fallback to local auth check just in case,
+            // but if they really mistyped, the local auth check will also fail them.
+            console.debug("Firebase auth failed with invalid credentials, falling back to local check.");
         }
       }
 
@@ -103,9 +101,24 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        const text = await response.text();
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          console.error("Server returned non-JSON response:", text.substring(0, 200));
+          if (text.includes("Bad Gateway") || text.includes("ECONNREFUSED") || text.includes("502")) {
+             throw new Error("Impossible de se connecter au serveur backend. Si vous êtes en local, assurez-vous d'avoir lancé l'application avec 'npm run dev' (qui démarre le backend sur le port 3000) et non juste 'vite'.");
+          }
+          throw new Error("Erreur inattendue du serveur (la réponse n'est pas au format JSON). Le serveur backend n'est peut-être pas démarré correctement.");
+        }
+      } catch (e: any) {
+        throw new Error(e.message || "Erreur inattendue du serveur.");
+      }
+
       if (!response.ok) {
-        throw new Error(data.error || "Une erreur est survenue lors de l'authentification serveur.");
+        throw new Error(data?.error || "Une erreur est survenue lors de l'authentification serveur.");
       }
 
       onSuccess(data);

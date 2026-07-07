@@ -31,8 +31,11 @@ export type QuestionType =
   | 'short_answer'   // Réponse courte
   | 'numerical'      // Numérique
   | 'drag_drop_text' // Glisser-déposer sur texte
+  | 'drag_drop_image'// Glisser-déposer sur image
   | 'cloze'          // Texte à trous (Cloze)
   | 'essay'          // Composition (correction manuelle)
+  | 'calculated'     // Calculée
+  | 'calculated_simple' // Calculée simple
   | 'description';   // Bloc description (non noté)
 
 export interface Question {
@@ -48,6 +51,15 @@ export interface Question {
   difficulty?: 'Easy' | 'Medium' | 'Hard';
   // Dynamic variables for calculated questions if applicable
   variables?: { name: string; min: number; max: number; decimals: number }[];
+  feedbackPerOption?: string[]; // Feedbacks specific to each response option
+  imageMedia?: string; // Image or media URL/base64
+  attachments?: { name: string; url: string }[]; // Attached files
+  penalty?: number; // Penalty for wrong attempts
+  category?: string; // Category for question bank
+  subCategory?: string; // Sub-category for question bank
+  chapter?: string; // Chapter name
+  keywords?: string[]; // Keywords or tags for searching
+  isArchived?: boolean; // Archived flag for question bank
 }
 
 export interface Exam {
@@ -62,6 +74,19 @@ export interface Exam {
   gradingScaleText?: string;
   createdAt: string;
   monitoringConfig?: MonitoringConfig;
+  description?: string;
+  attemptsMax?: number;
+  maxGrade?: number;
+  passingGrade?: number;
+  category?: string;
+  shuffleQuestions?: boolean;
+  shuffleAnswers?: boolean;
+  questionsPerPage?: 'one' | 'all';
+  navigationMethod?: 'free' | 'sequential';
+  endDate?: string;
+  password?: string;
+  accessRestriction?: string;
+  reviewOptions?: { showResults: boolean; immediateFeedback: boolean };
 }
 
 export interface MonitoringConfig {

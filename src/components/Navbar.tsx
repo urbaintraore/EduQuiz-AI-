@@ -65,6 +65,20 @@ export default function Navbar({
                       <span>Mes Cours & Examens</span>
                     </span>
                   </button>
+
+                  <button
+                    onClick={() => setActiveTab("moodle_editor")}
+                    className={`px-3 py-1.5 rounded-md font-medium transition-all cursor-pointer ${
+                      activeTab === "moodle_editor"
+                        ? "bg-white dark:bg-slate-700 text-slate-950 dark:text-slate-50 shadow-xs"
+                        : "text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-slate-105"
+                    }`}
+                  >
+                    <span className="flex items-center space-x-1">
+                      <Layers className="w-4 h-4" />
+                      <span>Éditeur de Questions Scientifique & Cloze Intégré</span>
+                    </span>
+                  </button>
                 </div>
               )}
 

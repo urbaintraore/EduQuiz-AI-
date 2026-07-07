@@ -13,6 +13,7 @@ import { initializeApp, getApps, getApp, cert } from "firebase-admin/app";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import nodemailer from "nodemailer";
 import multer from "multer";
+import firebaseAppletConfig from "./firebase-applet-config.json";
 import * as pdfParseModule from "pdf-parse";
 import * as mammothModule from "mammoth";
 import * as tesseractModule from "tesseract.js";
@@ -26,19 +27,53 @@ function getCallable(mod: any) {
   return mod;
 }
 
-const pdfParse = getCallable(pdfParseModule);
+// Robust PDF Parse wrapper to handle both legacy function-based and modern class-based pdf-parse signatures
+async function pdfParse(buffer: Buffer): Promise<{ text: string }> {
+  // 1. Try using the named export PDFParse class (from modern pdf-parse)
+  if (pdfParseModule && typeof (pdfParseModule as any).PDFParse === "function") {
+    try {
+      const PDFParseClass = (pdfParseModule as any).PDFParse;
+      const parser = new PDFParseClass(new Uint8Array(buffer));
+      const res = await parser.getText();
+      return { text: res?.text || "" };
+    } catch (err) {
+      console.warn("[pdfParse] Failed with named PDFParse class, trying fallback...", err);
+    }
+  }
+
+  // 2. Try using the default export as a class
+  if (pdfParseModule && (pdfParseModule as any).default && typeof (pdfParseModule as any).default.PDFParse === "function") {
+    try {
+      const PDFParseClass = (pdfParseModule as any).default.PDFParse;
+      const parser = new PDFParseClass(new Uint8Array(buffer));
+      const res = await parser.getText();
+      return { text: res?.text || "" };
+    } catch (err) {
+      console.warn("[pdfParse] Failed with default.PDFParse class, trying fallback...", err);
+    }
+  }
+
+  // 3. Try using the legacy function-based pdf-parse or fallback to calling it as class or function
+  const legacyPdfParse = getCallable(pdfParseModule);
+  if (typeof legacyPdfParse === "function") {
+    try {
+      // Maybe it is a class
+      const parser = new (legacyPdfParse as any)(new Uint8Array(buffer));
+      const res = await parser.getText();
+      return { text: res?.text || "" };
+    } catch {
+      // Or maybe it is a regular function
+      const res = await (legacyPdfParse as any)(buffer);
+      return typeof res === "object" && res !== null ? { text: res.text || "" } : { text: String(res || "") };
+    }
+  }
+
+  throw new Error("No usable PDF parsing function found.");
+}
 const mammoth = getCallable(mammothModule);
 const Tesseract = getCallable(tesseractModule);
 
 dotenv.config();
-
-const __filename = typeof window === "undefined" && typeof import.meta?.url === "string"
-  ? fileURLToPath(import.meta.url)
-  : "";
-
-const __dirname = typeof window === "undefined" && __filename
-  ? path.dirname(__filename)
-  : "";
 
 const app = express();
 const PORT = 3000;
@@ -87,6 +122,8 @@ interface DBStructure {
   monitoringEvents: any[];
   monitoringReports: any[];
 }
+
+type UserRole = 'teacher' | 'student' | 'admin';
 
 // Prepopulated clean data to make the app interactive out-of-the-box
 const INITIAL_DB: DBStructure = {
@@ -281,24 +318,70 @@ try {
     console.warn("⚠️ Running on Vercel without FIREBASE_SERVICE_ACCOUNT. Disabling Firestore to prevent connection timeouts.");
     appInitialized = false;
   } else {
-    // 1. First try FIREBASE_SERVICE_ACCOUNT base64 from environment
+    // 1. First try FIREBASE_SERVICE_ACCOUNT from environment
     if (!appInitialized && process.env.FIREBASE_SERVICE_ACCOUNT) {
       try {
-        let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT;
-        if (!serviceAccountStr.trim().startsWith('{')) {
-          serviceAccountStr = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
+        let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
+        console.log("🔍 [Audit] Firebase Service Account detection...");
+        
+        // Comprehensive check for common corruption patterns
+        const looksLikeJson = serviceAccountStr.startsWith('{');
+        const looksLikeBase64 = /^[A-Za-z0-9+/=]+$/.test(serviceAccountStr.replace(/\s/g, ''));
+        
+        if (!looksLikeJson) {
+          if (looksLikeBase64) {
+            console.log("   -> Detected probable Base64 encoding. Decoding...");
+            const decoded = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
+            if (decoded.trim().startsWith('{')) {
+               serviceAccountStr = decoded;
+               console.log("   -> Successful Base64 JSON extraction.");
+            } else {
+               console.warn("   -> Base64 decoded string is NOT JSON. Falling back to raw string.");
+            }
+          } else {
+            console.warn("   -> Value is neither JSON nor valid Base64. Check for hidden characters or corruption.");
+          }
         }
-        const serviceAccount = JSON.parse(serviceAccountStr);
-        if (getApps().length === 0) {
-          initializeApp({
-            credential: cert(serviceAccount),
-            projectId: serviceAccount.project_id
-          });
-          appInitialized = true;
-          console.log("🔥 Firebase Admin initialized via Service Account for project:", serviceAccount.project_id);
+
+        try {
+          const serviceAccount = JSON.parse(serviceAccountStr);
+          if (getApps().length === 0) {
+            const app = initializeApp({
+              credential: cert(serviceAccount),
+              projectId: serviceAccount.project_id
+            });
+            const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+            dbFirestore = dbId ? getFirestore(app, dbId) : getFirestore(app);
+            appInitialized = true;
+            console.log(`🔥 [Audit] Firebase Admin initialized for project: ${serviceAccount.project_id}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
+          }
+        } catch (jsonErr: any) {
+          console.error("   ❌ JSON Parse Error:", jsonErr.message);
+          // Log specific character to help user debug
+          const firstChar = serviceAccountStr.charCodeAt(0);
+          console.error(`   First char code: ${firstChar} (Char: '${serviceAccountStr[0]}')`);
+          throw jsonErr;
         }
-      } catch (e) {
-        console.error("⚠️ Failed to parse FIREBASE_SERVICE_ACCOUNT as JSON, falling back:", e);
+      } catch (e: any) {
+        console.error("❌ [Audit] Failed to initialize Firebase Admin via Service Account.");
+        console.log("   -> Attempting fallback to Application Default Credentials...");
+        try {
+          if (getApps().length === 0) {
+            const fallbackProjectId = (process.env.VITE_FIREBASE_PROJECT_ID && !process.env.VITE_FIREBASE_PROJECT_ID.startsWith("re_"))
+               ? process.env.VITE_FIREBASE_PROJECT_ID 
+               : (firebaseAppletConfig.projectId || "eduquiz-632c5");
+            
+            const app = initializeApp({
+               projectId: fallbackProjectId
+            });
+            const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+            dbFirestore = dbId ? getFirestore(app, dbId) : getFirestore(app);
+            appInitialized = true;
+            console.log(`🔥 [Audit] Firebase Admin fallback initialized via ADC for project: ${fallbackProjectId}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
+          }
+        } catch (fallbackErr: any) {
+          console.error("   -> ADC Fallback also failed:", fallbackErr.message);
+        }
       }
     } 
     
@@ -329,29 +412,45 @@ try {
           });
         }
         appInitialized = true;
-        console.log("🔥 Firebase Admin initialized successfully for project:", projectId);
+        const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+        dbFirestore = dbId ? getFirestore(getApp(), dbId) : getFirestore(getApp());
+        console.log(`🔥 [Audit] Firebase Admin final initialization for project: ${projectId}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
       } catch (e) {
-        console.error("❌ Failed to initialize Firebase Admin:", e);
+        console.error("❌ [Audit] Failed to initialize Firebase Admin in final block:", e);
       }
     }
   }
 
   // Set up firestore if app was initialized
   if (appInitialized) {
-    let dbId = "(default)"; // Default to user's database ID
+    let dbId = "(default)"; 
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     if (fs.existsSync(configPath)) {
         try {
           const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-          if (useSandbox) {
-            dbId = "ai-studio-eduquizai-495bc204-9e63-4640-903e-b91ff9e217ca";
-          } else if (config.firestoreDatabaseId) {
+          if (config.firestoreDatabaseId) {
             dbId = config.firestoreDatabaseId;
+            console.log(`🔍 [Audit] Using Firestore Database ID from config: ${dbId}`);
+          } else if (useSandbox) {
+            dbId = "ai-studio-eduquizai-495bc204-9e63-4640-903e-b91ff9e217ca";
+            console.log(`🔍 [Audit] Using Sandbox Firestore Database ID: ${dbId}`);
           }
         } catch (_) {}
     }
-    dbFirestore = getFirestore(getApp(), dbId);
-    console.log("🔥 Firestore initialized using Database ID:", dbId);
+    
+    try {
+      dbFirestore = getFirestore(getApp(), dbId);
+      console.log(`🔥 [Audit] Firestore Admin SDK successfully initialized (DB: ${dbId})`);
+    } catch (fsErr: any) {
+      console.error(`❌ [Audit] Failed to initialize Firestore SDK with DB ID '${dbId}':`, fsErr.message);
+      console.log("   -> Attempting final fallback to (default) database...");
+      try {
+        dbFirestore = getFirestore(getApp(), "(default)");
+        console.log("🔥 [Audit] Firestore Admin SDK successfully initialized (DB: (default))");
+      } catch (finalErr: any) {
+        console.error("   ❌ [Audit] Final fallback also failed:", finalErr.message);
+      }
+    }
   } else {
     console.warn("⚠️ Warning: No Firebase credentials found. Falling back to local db.json storage.");
   }
@@ -388,14 +487,21 @@ async function initializeDatabaseState() {
 
       const syncAndSeedPromise = (async () => {
         // Load all keys in parallel
+        console.log(`   -> Loading collections: ${keys.join(", ")}`);
         await Promise.all(
           keys.map(async (key) => {
-            const docSnap = await collRef.doc(key).get();
-            if (docSnap.exists) {
-              loadedData[key] = docSnap.data()?.data || [];
-              hasData = true;
-            } else {
-              loadedData[key] = INITIAL_DB[key];
+            try {
+              const docSnap = await collRef.doc(key).get();
+              if (docSnap.exists) {
+                loadedData[key] = docSnap.data()?.data || [];
+                hasData = true;
+              } else {
+                console.log(`      - Collection '${key}' not found in Firestore, using defaults.`);
+                loadedData[key] = INITIAL_DB[key];
+              }
+            } catch (err: any) {
+              console.error(`      ❌ Error loading collection '${key}':`, err.message);
+              throw err; // Propagate to outer catch
             }
           })
         );
@@ -873,16 +979,29 @@ app.post("/api/auth/login", (req, res) => {
   }
 
   const db = getDB();
-  const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  let user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   
+  if (!user && firebaseUid) {
+    console.log(`🆕 Auto-creating local profile for Firebase user: ${email}`);
+    user = {
+      id: firebaseUid,
+      email: email.toLowerCase(),
+      password: password || "", // Password is less relevant if authenticated via Firebase
+      role: (req.body.role as UserRole) || "student",
+      university: (req.body.university as string) || "Université d'études",
+      schoolClass: (req.body.schoolClass as string) || ""
+    };
+    db.users.push(user);
+    saveDB(db);
+  }
+
   if (!user) {
-    return res.status(401).json({ error: "Aucun compte trouvé avec cet email localement." });
+    return res.status(401).json({ error: "Aucun compte trouvé avec cet email localement. Veuillez créer un compte." });
   }
 
   // If client provides firebaseUid, it implies they successfully authenticated on firebase client SDK
   if (firebaseUid) {
     if (user.id !== firebaseUid) {
-      // Just in case we need to update the id to match firebase
       user.id = firebaseUid;
       saveDB(db);
     }
@@ -1027,7 +1146,11 @@ app.get("/api/courses/:courseId/exams", (req, res) => {
 
 app.post("/api/courses/:courseId/exams", (req, res) => {
   const { courseId } = req.params;
-  const { title, duration, startDate, subjectText, solutionText, gradingScaleText, monitoringConfig } = req.body;
+  const {
+    title, duration, startDate, subjectText, solutionText, gradingScaleText, monitoringConfig,
+    description, attemptsMax, maxGrade, passingGrade, category, shuffleQuestions, shuffleAnswers,
+    questionsPerPage, navigationMethod, endDate, password, accessRestriction, reviewOptions
+  } = req.body;
 
   if (!title) {
     return res.status(400).json({ error: "Veuillez donner un titre à l'examen." });
@@ -1045,7 +1168,20 @@ app.post("/api/courses/:courseId/exams", (req, res) => {
     solutionText: solutionText || "",
     gradingScaleText: gradingScaleText || "Sur 20 points",
     monitoringConfig,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    description: description || "",
+    attemptsMax: attemptsMax !== undefined ? parseInt(attemptsMax) : 1,
+    maxGrade: maxGrade !== undefined ? parseFloat(maxGrade) : 20,
+    passingGrade: passingGrade !== undefined ? parseFloat(passingGrade) : 10,
+    category: category || "",
+    shuffleQuestions: shuffleQuestions !== undefined ? !!shuffleQuestions : false,
+    shuffleAnswers: shuffleAnswers !== undefined ? !!shuffleAnswers : false,
+    questionsPerPage: questionsPerPage || "all",
+    navigationMethod: navigationMethod || "free",
+    endDate: endDate || "",
+    password: password || "",
+    accessRestriction: accessRestriction || "",
+    reviewOptions: reviewOptions || { showResults: true, immediateFeedback: true }
   };
 
   db.exams.push(newExam);
@@ -1056,10 +1192,19 @@ app.post("/api/courses/:courseId/exams", (req, res) => {
 
 app.get("/api/exams/:id", (req, res) => {
   const { id } = req.params;
+  const { studentId } = req.query;
   const db = getDB();
 
   const exam = db.exams.find(e => e.id === id);
   if (!exam) return res.status(404).json({ error: "Examen introuvable." });
+
+  // ONLY enrolled students can access the exam
+  if (studentId) {
+    const isEnrolled = db.enrollments.some(e => e.studentId === studentId && e.courseId === exam.courseId);
+    if (!isEnrolled) {
+      return res.status(403).json({ error: "Accès refusé. Seuls les étudiants inscrits dans le cours ont accès à cet examen." });
+    }
+  }
 
   // Enrich with course and stats
   const course = db.courses.find(c => c.id === exam.courseId);
@@ -1076,7 +1221,11 @@ app.get("/api/exams/:id", (req, res) => {
 
 app.put("/api/exams/:id", (req, res) => {
   const { id } = req.params;
-  const { title, duration, startDate, status, subjectText, solutionText, gradingScaleText, monitoringConfig } = req.body;
+  const {
+    title, duration, startDate, status, subjectText, solutionText, gradingScaleText, monitoringConfig,
+    description, attemptsMax, maxGrade, passingGrade, category, shuffleQuestions, shuffleAnswers,
+    questionsPerPage, navigationMethod, endDate, password, accessRestriction, reviewOptions
+  } = req.body;
 
   const db = getDB();
   const index = db.exams.findIndex(e => e.id === id);
@@ -1093,6 +1242,19 @@ app.put("/api/exams/:id", (req, res) => {
     solutionText: solutionText !== undefined ? solutionText : existing.solutionText,
     gradingScaleText: gradingScaleText !== undefined ? gradingScaleText : existing.gradingScaleText,
     monitoringConfig: monitoringConfig !== undefined ? monitoringConfig : existing.monitoringConfig,
+    description: description !== undefined ? description : existing.description,
+    attemptsMax: attemptsMax !== undefined ? parseInt(attemptsMax) : existing.attemptsMax,
+    maxGrade: maxGrade !== undefined ? parseFloat(maxGrade) : existing.maxGrade,
+    passingGrade: passingGrade !== undefined ? parseFloat(passingGrade) : existing.passingGrade,
+    category: category !== undefined ? category : existing.category,
+    shuffleQuestions: shuffleQuestions !== undefined ? !!shuffleQuestions : existing.shuffleQuestions,
+    shuffleAnswers: shuffleAnswers !== undefined ? !!shuffleAnswers : existing.shuffleAnswers,
+    questionsPerPage: questionsPerPage !== undefined ? questionsPerPage : existing.questionsPerPage,
+    navigationMethod: navigationMethod !== undefined ? navigationMethod : existing.navigationMethod,
+    endDate: endDate !== undefined ? endDate : existing.endDate,
+    password: password !== undefined ? password : existing.password,
+    accessRestriction: accessRestriction !== undefined ? accessRestriction : existing.accessRestriction,
+    reviewOptions: reviewOptions !== undefined ? reviewOptions : existing.reviewOptions,
   };
 
   saveDB(db);
@@ -1115,7 +1277,18 @@ app.delete("/api/exams/:id", (req, res) => {
 
 app.get("/api/exams/:examId/questions", (req, res) => {
   const { examId } = req.params;
+  const { studentId } = req.query;
   const db = getDB();
+
+  const exam = db.exams.find(e => e.id === examId);
+  if (!exam) return res.status(404).json({ error: "Examen introuvable." });
+
+  if (studentId) {
+    const isEnrolled = db.enrollments.some(e => e.studentId === studentId && e.courseId === exam.courseId);
+    if (!isEnrolled) {
+      return res.status(403).json({ error: "Accès refusé. Seuls les étudiants inscrits dans le cours ont accès à cet examen." });
+    }
+  }
 
   const questions = db.questions.filter(q => q.examId === examId);
   res.json(questions);
@@ -1123,7 +1296,10 @@ app.get("/api/exams/:examId/questions", (req, res) => {
 
 app.post("/api/exams/:examId/questions", (req, res) => {
   const { examId } = req.params;
-  const { type, statement, options, matchingTargets, correctAnswer, points, explanation, difficulty } = req.body;
+  const {
+    type, statement, options, matchingTargets, correctAnswer, points, explanation, difficulty,
+    feedbackPerOption, imageMedia, attachments, penalty, category, subCategory, chapter, keywords, isArchived
+  } = req.body;
 
   if (!type || !statement) {
     return res.status(400).json({ error: "Le type et l'énoncé sont requis." });
@@ -1140,7 +1316,16 @@ app.post("/api/exams/:examId/questions", (req, res) => {
     correctAnswer: correctAnswer || "",
     points: parseFloat(points) || 1,
     explanation: explanation || "",
-    difficulty: difficulty || "Medium"
+    difficulty: difficulty || "Medium",
+    feedbackPerOption: feedbackPerOption || [],
+    imageMedia: imageMedia || "",
+    attachments: attachments || [],
+    penalty: penalty !== undefined ? parseFloat(penalty) : 0,
+    category: category || "",
+    subCategory: subCategory || "",
+    chapter: chapter || "",
+    keywords: keywords || [],
+    isArchived: isArchived !== undefined ? !!isArchived : false
   };
 
   db.questions.push(newQuestion);
@@ -1151,7 +1336,10 @@ app.post("/api/exams/:examId/questions", (req, res) => {
 
 app.put("/api/questions/:id", (req, res) => {
   const { id } = req.params;
-  const { statement, options, matchingTargets, correctAnswer, points, explanation, type, difficulty } = req.body;
+  const {
+    statement, options, matchingTargets, correctAnswer, points, explanation, type, difficulty,
+    feedbackPerOption, imageMedia, attachments, penalty, category, subCategory, chapter, keywords, isArchived, examId
+  } = req.body;
 
   const db = getDB();
   const idx = db.questions.findIndex(q => q.id === id);
@@ -1160,6 +1348,7 @@ app.put("/api/questions/:id", (req, res) => {
   const existing = db.questions[idx];
   db.questions[idx] = {
     ...existing,
+    examId: examId !== undefined ? examId : existing.examId,
     type: type !== undefined ? type : existing.type,
     statement: statement !== undefined ? statement : existing.statement,
     options: options !== undefined ? options : existing.options,
@@ -1168,6 +1357,15 @@ app.put("/api/questions/:id", (req, res) => {
     points: points !== undefined ? parseFloat(points) : existing.points,
     explanation: explanation !== undefined ? explanation : existing.explanation,
     difficulty: difficulty !== undefined ? difficulty : existing.difficulty,
+    feedbackPerOption: feedbackPerOption !== undefined ? feedbackPerOption : existing.feedbackPerOption,
+    imageMedia: imageMedia !== undefined ? imageMedia : existing.imageMedia,
+    attachments: attachments !== undefined ? attachments : existing.attachments,
+    penalty: penalty !== undefined ? parseFloat(penalty) : existing.penalty,
+    category: category !== undefined ? category : existing.category,
+    subCategory: subCategory !== undefined ? subCategory : existing.subCategory,
+    chapter: chapter !== undefined ? chapter : existing.chapter,
+    keywords: keywords !== undefined ? keywords : existing.keywords,
+    isArchived: isArchived !== undefined ? !!isArchived : existing.isArchived,
   };
 
   saveDB(db);
@@ -1450,6 +1648,12 @@ app.post("/api/exams/:examId/submit", (req, res) => {
   const exam = db.exams.find(e => e.id === examId);
   if (!exam) return res.status(404).json({ error: "Examen introuvable." });
 
+  // Only enrolled students can submit!
+  const isEnrolled = db.enrollments.some(e => e.studentId === studentId && e.courseId === exam.courseId);
+  if (!isEnrolled) {
+    return res.status(403).json({ error: "Soumission refusée. Seuls les étudiants inscrits dans le cours ont accès à cet examen." });
+  }
+
   // Get active exam questions
   const examQuestions = db.questions.filter(q => q.examId === examId);
 
@@ -1656,6 +1860,215 @@ app.get("/api/students/:studentId/submissions", (req, res) => {
   });
 
   res.json(enriched);
+});
+
+// Get consolidated learning analytics for a specific student
+app.get("/api/students/:studentId/analytics", (req, res) => {
+  const { studentId } = req.params;
+  const db = getDB();
+
+  const getQuestionThemeLocal = (q: any) => {
+    if (q.type === "mcq") return "Théorie & Concepts";
+    if (q.type === "true_false") return "Logique & Diagnostic";
+    if (q.type === "matching" || q.type === "cloze") return "Appariement & Syntaxe";
+    if (q.type === "numerical" || q.type === "short_answer") return "Calculs & Analyse";
+    if (q.type === "essay") return "Démonstration & Rédaction";
+    return "Général";
+  };
+
+  // Find all submissions for this student
+  const subs = db.submissions.filter(s => s.studentId === studentId);
+  
+  if (subs.length === 0) {
+    return res.json({
+      progress: [],
+      themes: [
+        { subject: "Théorie & Concepts", obtained: 0, total: 100, percentage: 0 },
+        { subject: "Logique & Diagnostic", obtained: 0, total: 100, percentage: 0 },
+        { subject: "Appariement & Syntaxe", obtained: 0, total: 100, percentage: 0 },
+        { subject: "Calculs & Analyse", obtained: 0, total: 100, percentage: 0 },
+        { subject: "Démonstration & Rédaction", obtained: 0, total: 100, percentage: 0 }
+      ],
+      proctoring: { tabSwitches: 0, windowBlurs: 0, fullscreenExits: 0, totalEvents: 0, avgSuspicionScore: 0 },
+      stats: { examsTaken: 0, avgScore: 0, passingRate: 0, bestScore: 0 },
+      recommendations: ["Inscrivez-vous à un cours et passez votre premier examen pour recevoir des recommandations IA personnalisées !"]
+    });
+  }
+
+  // 1. Stats
+  let totalScoreSum = 0;
+  let gradedCount = 0;
+  let passedCount = 0;
+  let bestScore = 0;
+
+  // 2. Progress
+  const progressList = subs.map(sub => {
+    const exam = db.exams.find(e => e.id === sub.examId);
+    const examQuestions = db.questions.filter(q => q.examId === sub.examId && q.type !== "description");
+    const totalPoints = examQuestions.reduce((sum, q) => sum + (q.points || 1), 0);
+    
+    let subScore = sub.score;
+    if (subScore !== null) {
+      // normalize to 20
+      const normalized = (subScore / (totalPoints || 1)) * 20;
+      totalScoreSum += normalized;
+      gradedCount++;
+      if (normalized >= 10) {
+        passedCount++;
+      }
+      if (normalized > bestScore) {
+        bestScore = parseFloat(normalized.toFixed(1));
+      }
+    }
+
+    return {
+      examId: sub.examId,
+      examTitle: exam ? exam.title : "Examen supprimé",
+      score: subScore !== null ? parseFloat(subScore.toFixed(1)) : null,
+      maxScore: totalPoints,
+      normalizedScore: subScore !== null ? parseFloat(((subScore / (totalPoints || 1)) * 20).toFixed(1)) : null,
+      date: sub.submittedAt
+    };
+  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const avgScore = gradedCount > 0 ? parseFloat((totalScoreSum / gradedCount).toFixed(1)) : 0;
+  const passingRate = gradedCount > 0 ? parseFloat(((passedCount / gradedCount) * 100).toFixed(1)) : 0;
+
+  // 3. Themes
+  const themeScores: Record<string, { obtained: number; total: number }> = {
+    "Théorie & Concepts": { obtained: 0, total: 0 },
+    "Logique & Diagnostic": { obtained: 0, total: 0 },
+    "Appariement & Syntaxe": { obtained: 0, total: 0 },
+    "Calculs & Analyse": { obtained: 0, total: 0 },
+    "Démonstration & Rédaction": { obtained: 0, total: 0 }
+  };
+
+  // Populate total from exam questions
+  subs.forEach(sub => {
+    const examQuestions = db.questions.filter(q => q.examId === sub.examId);
+    examQuestions.forEach(q => {
+      const theme = getQuestionThemeLocal(q);
+      if (themeScores[theme]) {
+        themeScores[theme].total += q.points || 1;
+        
+        // Calculate student score for this question
+        const studentAns = sub.answers[q.id];
+        if (q.type === "essay") {
+          const feed = sub.essayFeedbacks?.[q.id];
+          if (feed && feed.score !== undefined) {
+            themeScores[theme].obtained += feed.score;
+          }
+        } else if (q.type === "description") {
+          // skip
+        } else {
+          let isCorrect = false;
+          if (studentAns !== undefined && studentAns !== null) {
+            if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
+              isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
+            } else if (q.type === "matching") {
+              try {
+                let matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
+                let matches = 0;
+                const opts = q.options || [];
+                const targets = q.matchingTargets || [];
+                opts.forEach((key: string, idx: number) => {
+                  if (matchingMap && matchingMap[key] === targets[idx]) matches++;
+                });
+                if (opts.length > 0) {
+                  themeScores[theme].obtained += (matches / opts.length) * (q.points || 1);
+                }
+              } catch (_) {}
+            }
+          }
+          if (isCorrect) {
+            themeScores[theme].obtained += q.points || 1;
+          }
+        }
+      }
+    });
+  });
+
+  const themesList = Object.keys(themeScores).map(theme => {
+    const { obtained, total } = themeScores[theme];
+    const percentage = total > 0 ? parseFloat(((obtained / total) * 100).toFixed(1)) : 0;
+    return {
+      subject: theme,
+      obtained: parseFloat(obtained.toFixed(1)),
+      total,
+      percentage
+    };
+  });
+
+  // 4. Proctoring summary for this student
+  const studentReports = (db.monitoringReports || []).filter(r => r.studentId === studentId);
+  let totalTabSwitches = 0;
+  let totalWindowBlurs = 0;
+  let totalFullscreenExits = 0;
+  let totalEventsCount = 0;
+  let suspicionSum = 0;
+
+  studentReports.forEach(r => {
+    suspicionSum += r.suspicionScore || 0;
+    if (r.events) {
+      r.events.forEach((ev: any) => {
+        totalEventsCount++;
+        if (ev.eventType === "TAB_SWITCH") totalTabSwitches++;
+        else if (ev.eventType === "WINDOW_BLUR") totalWindowBlurs++;
+        else if (ev.eventType === "FULLSCREEN_EXIT") totalFullscreenExits++;
+      });
+    }
+  });
+
+  const avgSuspicionScore = studentReports.length > 0 ? parseFloat((suspicionSum / studentReports.length).toFixed(1)) : 0;
+
+  // 5. AI Recommendations
+  const recommendations: string[] = [];
+  const sortedThemes = [...themesList].sort((a, b) => a.percentage - b.percentage);
+  
+  if (sortedThemes[0] && sortedThemes[0].percentage < 60) {
+    const weakTheme = sortedThemes[0].subject;
+    if (weakTheme === "Théorie & Concepts") {
+      recommendations.push("💡 **Théorie & Concepts** : Vos résultats indiquent des lacunes sur les définitions de cours. Nous vous conseillons de relire les fiches de synthèse de l'assistant IA.");
+    } else if (weakTheme === "Logique & Diagnostic") {
+      recommendations.push("💡 **Logique & Diagnostic** : Prenez plus de temps pour analyser les énoncés Vrai/Faux. Évitez de répondre précipitamment sans analyser chaque option.");
+    } else if (weakTheme === "Appariement & Syntaxe") {
+      recommendations.push("💡 **Appariement & Syntaxe** : Entraînez-vous à relier les concepts clés entre eux. Les correspondances partielles diminuent vite votre note globale.");
+    } else if (weakTheme === "Calculs & Analyse") {
+      recommendations.push("💡 **Calculs & Analyse** : Revoyez la rigueur de vos calculs numériques. Utilisez l'éditeur scientifique intégré pour poser vos formules pas à pas.");
+    } else if (weakTheme === "Démonstration & Rédaction") {
+      recommendations.push("💡 **Démonstration & Rédaction** : Vos réponses ouvertes manquent d'arguments ou de mots-clés. Pensez à étayer vos réponses en citant des exemples du cours.");
+    }
+  }
+
+  if (sortedThemes[1] && sortedThemes[1].percentage < 70) {
+    const secondWeak = sortedThemes[1].subject;
+    recommendations.push(`📖 **Renforcement (${secondWeak})** : Consacrez 15 minutes par jour à des exercices pratiques de cette catégorie pour consolider vos acquis.`);
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push("🏆 **Excellent travail !** Vos performances sont très équilibrées sur toutes les thématiques. Continuez à maintenir ce niveau exceptionnel !");
+  } else {
+    recommendations.push("🧠 **Astuce de l'Assistant IA** : Utilisez le chatbot interactif de soutien pour lui demander un quiz d'entraînement spécifique sur vos points faibles !");
+  }
+
+  res.json({
+    progress: progressList,
+    themes: themesList,
+    proctoring: {
+      tabSwitches: totalTabSwitches,
+      windowBlurs: totalWindowBlurs,
+      fullscreenExits: totalFullscreenExits,
+      totalEvents: totalEventsCount,
+      avgSuspicionScore
+    },
+    stats: {
+      examsTaken: subs.length,
+      avgScore,
+      passingRate,
+      bestScore
+    },
+    recommendations
+  });
 });
 
 // Get detailed submission, including questions and exam info
@@ -2158,10 +2571,21 @@ app.get("/api/exams/:id/export-grades", (req, res) => {
 
 app.post("/api/exams/:examId/monitoring", (req, res) => {
   const { examId } = req.params;
-  const { studentId, eventType, severity, details, timestamp } = req.body;
+  let { studentId, eventType, severity, details, timestamp } = req.body;
+
+  // Support eventData wrapper if provided by client
+  if (req.body.eventData) {
+    if (!eventType) eventType = req.body.eventData.type;
+    if (!details) details = req.body.eventData.details;
+  }
 
   if (!studentId || !eventType) {
     return res.status(400).json({ error: "Champs obligatoires manquants" });
+  }
+
+  // Normalize eventType values
+  if (eventType === "TAB_CHANGED") {
+    eventType = "TAB_SWITCH";
   }
 
   const db = getDB();
@@ -2335,6 +2759,29 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 // --- CLIENT-SIDE VITE PIPELINE AND DEV RUNNER ---
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    env: process.env.NODE_ENV,
+    isVercel: !!process.env.VERCEL,
+    firebase: {
+      initialized: getApps().length > 0,
+      adminSdk: !!dbFirestore,
+      projectId: getApps().length > 0 ? getApp().options.projectId : null
+    },
+    db: {
+      loaded: !!dbMemory,
+      userCount: dbMemory ? dbMemory.users.length : 0,
+      courseCount: dbMemory ? dbMemory.courses.length : 0
+    }
+  });
+});
+
+// API 404 Fallback - ensures unhandled API routes return JSON, not HTML from Vite SPA fallback
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
+});
 
 // Register production static files synchronously at load time for robust serverless performance
 if (process.env.NODE_ENV === "production" || process.env.VERCEL) {

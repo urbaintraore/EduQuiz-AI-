@@ -6,27 +6,50 @@ import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence }
 import { getFirestore } from "firebase/firestore";
 import firebaseAppletConfig from '../firebase-applet-config.json';
 
+const getValidEnv = (val: string | undefined, fallback: string) => {
+  if (!val || val.startsWith("re_") || val.includes("PLACEHOLDER")) return fallback;
+  return val;
+};
+
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId
+  apiKey: getValidEnv(import.meta.env.VITE_FIREBASE_API_KEY, firebaseAppletConfig.apiKey),
+  authDomain: getValidEnv(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN, firebaseAppletConfig.authDomain),
+  projectId: getValidEnv(import.meta.env.VITE_FIREBASE_PROJECT_ID, firebaseAppletConfig.projectId),
+  storageBucket: getValidEnv(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET, firebaseAppletConfig.storageBucket),
+  messagingSenderId: getValidEnv(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID, firebaseAppletConfig.messagingSenderId),
+  appId: getValidEnv(import.meta.env.VITE_FIREBASE_APP_ID, firebaseAppletConfig.appId),
+  measurementId: getValidEnv(import.meta.env.VITE_FIREBASE_MEASUREMENT_ID, firebaseAppletConfig.measurementId)
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
-export const auth = getAuth(app);
+let app: any = null;
+let analytics: any = null;
+let auth: any = null;
+let db: any = null;
 
-// Handle third-party cookie blocking in iframes gracefully
-setPersistence(auth, browserLocalPersistence).catch(() => {
-  setPersistence(auth, inMemoryPersistence).catch(console.warn);
-});
+try {
+  app = initializeApp(firebaseConfig);
+  
+  // We disable Analytics to prevent the "Installations: Create Installation request failed" 
+  // error when API key is restricted or invalid in the preview environment.
+  // analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+  
+  auth = getAuth(app);
+  
+  const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+  db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  
+  // Handle third-party cookie blocking in iframes gracefully
+  setPersistence(auth, browserLocalPersistence).catch(() => {
+    setPersistence(auth, inMemoryPersistence).catch(console.warn);
+  });
+  
+  db = getFirestore(app, firebaseAppletConfig.firestoreDatabaseId || "(default)");
+} catch (e) {
+  console.warn("⚠️ Firebase failed to initialize on client:", e);
+}
 
-export const db = getFirestore(app, firebaseAppletConfig.firestoreDatabaseId || "(default)");
+export { analytics, auth, db };
 
 import { getApiUrl } from "./config/api";
 export { getApiUrl };

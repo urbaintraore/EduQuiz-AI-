@@ -43,7 +43,10 @@ import {
   MessageSquare,
   Send,
   Search,
-  Link
+  Link,
+  ShieldAlert,
+  TrendingUp,
+  Brain
 } from "lucide-react";
 import Navbar from "./components/Navbar";
 import AuthPage from "./components/AuthPage";
@@ -57,11 +60,24 @@ import {
   PolarGrid,
   PolarAngleAxis,
   PolarRadiusAxis,
-  ResponsiveContainer
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  Cell,
+  PieChart,
+  Pie
 } from "recharts";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { ScientificRichEditor } from "./components/ScientificRichEditor";
+import MoodleEditor from "./components/MoodleEditor";
 
 // Premium LaTeX parser and math rendering engine using KaTeX
 interface MathRendererProps {
@@ -310,7 +326,10 @@ export default function App() {
 
   // AI Generation status
   const [aiGenerating, setAiGenerating] = useState(false);
-  const [teacherExamTab, setTeacherExamTab] = useState<'editor'|'monitoring'>('editor');
+  const [teacherExamTab, setTeacherExamTab] = useState<'editor'|'monitoring'|'analytics'>('editor');
+  const [studentTab, setStudentTab] = useState<'activities' | 'analytics'>('activities');
+  const [studentAnalytics, setStudentAnalytics] = useState<any>(null);
+  const [loadingStudentAnalytics, setLoadingStudentAnalytics] = useState<boolean>(false);
 
   // Student active taking states
   const [activeQuizExam, setActiveQuizExam] = useState<Exam | null>(null);
@@ -423,12 +442,64 @@ export default function App() {
       });
     };
 
+    const handleCopy = (e: ClipboardEvent) => {
+      e.preventDefault();
+      logMonitoringEvent("COPY_ATTEMPT");
+      triggerToast("Le copier-coller est désactivé pendant l'examen.", "error");
+    };
+
+    const handlePaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      logMonitoringEvent("PASTE_ATTEMPT");
+      triggerToast("Le copier-coller est désactivé pendant l'examen.", "error");
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      logMonitoringEvent("RIGHT_CLICK_ATTEMPT");
+      triggerToast("Le clic droit est désactivé pendant l'examen par mesure de sécurité.", "error");
+    };
+
+    const handleKeyDownForbidden = (e: KeyboardEvent) => {
+      // F12
+      if (e.key === "F12") {
+        e.preventDefault();
+        logMonitoringEvent("DEVTOOLS_ATTEMPT");
+        triggerToast("L'ouverture des outils de développement est interdite pendant l'évaluation.", "error");
+      }
+      // Inspect shortcuts
+      if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C" || e.key === "i" || e.key === "j" || e.key === "c")) {
+        e.preventDefault();
+        logMonitoringEvent("DEVTOOLS_ATTEMPT");
+        triggerToast("L'inspection d'éléments est interdite pendant l'évaluation.", "error");
+      }
+      // View Source shortcut
+      if (e.ctrlKey && (e.key === "u" || e.key === "U")) {
+        e.preventDefault();
+        logMonitoringEvent("DEVTOOLS_ATTEMPT");
+        triggerToast("L'affichage du code source est interdit.", "error");
+      }
+      // Print shortcuts block
+      if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        triggerToast("L'impression de la page est interdite.", "error");
+      }
+    };
+
     document.addEventListener("visibilitychange", handleVisibilityAndFocusChange);
     window.addEventListener("blur", handleWindowBlur);
+    document.addEventListener("copy", handleCopy);
+    document.addEventListener("paste", handlePaste);
+    document.addEventListener("contextmenu", handleContextMenu);
+    window.addEventListener("keydown", handleKeyDownForbidden, { capture: true });
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityAndFocusChange);
       window.removeEventListener("blur", handleWindowBlur);
+      document.removeEventListener("copy", handleCopy);
+      document.removeEventListener("paste", handlePaste);
+      document.removeEventListener("contextmenu", handleContextMenu);
+      window.removeEventListener("keydown", handleKeyDownForbidden, { capture: true });
     };
   }, [activeQuizExam, user]);
 
@@ -764,6 +835,7 @@ export default function App() {
     } else {
       fetchStudentCourses();
       fetchStudentSubmissionsData();
+      fetchStudentAnalytics();
     }
   }, [user]);
 
@@ -827,6 +899,22 @@ export default function App() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const fetchStudentAnalytics = async () => {
+    if (!user) return;
+    setLoadingStudentAnalytics(true);
+    try {
+      const res = await fetch(`/api/students/${user.id}/analytics`);
+      if (res.ok) {
+        const data = await res.json();
+        setStudentAnalytics(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingStudentAnalytics(false);
     }
   };
 
@@ -1250,7 +1338,7 @@ export default function App() {
         // If exam direct joining code was presented
         if (targetExamId) {
           try {
-            const examRes = await fetch(`/api/exams/${targetExamId}`);
+            const examRes = await fetch(`/api/exams/${targetExamId}?studentId=${user?.id}`);
             if (examRes.ok) {
               const examObj = await examRes.json();
               if (examObj.status !== "published") {
@@ -1260,7 +1348,8 @@ export default function App() {
               triggerToast(`Accès direct : ${examObj.title}`, "success");
               await proceedStartExamQuiz(examObj);
             } else {
-              triggerToast("Activité d'évaluation introuvable.", "error");
+              const errObj = await examRes.json();
+              triggerToast(errObj.error || "Activité d'évaluation indisponible ou accès refusé.", "error");
             }
           } catch {
             triggerToast("Erreur lors de l'accès à l'évaluation.", "error");
@@ -1415,7 +1504,7 @@ export default function App() {
 
   const proceedStartExamQuiz = async (examObj: Exam) => {
     try {
-      const res = await fetch(`/api/exams/${examObj.id}/questions`);
+      const res = await fetch(`/api/exams/${examObj.id}/questions?studentId=${user?.id}`);
       if (res.ok) {
         const qList = await res.json();
         if (qList.length === 0) {
@@ -1446,6 +1535,9 @@ export default function App() {
         setStudentQuizAnswers(savedAnswers);
         setIsFullscreenOn(true); // default premium look
         triggerToast("Examen commencé ! Bon courage !", "info");
+      } else {
+        const errObj = await res.json();
+        triggerToast(errObj.error || "Accès refusé. Seuls les étudiants inscrits dans le cours ont accès à cet examen.", "error");
       }
     } catch (e) {
       console.error("[Quiz System] startExamQuiz fatal error:", e);
@@ -1506,6 +1598,7 @@ export default function App() {
         setActiveQuizExam(null);
         setIsFullscreenOn(false);
         fetchStudentSubmissionsData(); // refresh history
+        fetchStudentAnalytics(); // refresh analytics
       } else {
         triggerToast(data.error || "Échec de la soumission.", "error");
       }
@@ -1578,7 +1671,32 @@ export default function App() {
               STUDENT ACTIVE ISOLATED FULLSCALE EXAM TAKING VIEW 
              ======================================================== */}
           {activeQuizExam && (
-            <div id="active-quiz-frame" className="bg-white rounded-2xl shadow-xl border-t-4 border-indigo-600 overflow-hidden my-4 max-w-7xl mx-auto">
+            <div id="active-quiz-frame" className="bg-white rounded-2xl shadow-xl border-t-4 border-indigo-600 overflow-hidden my-4 max-w-7xl mx-auto relative min-h-[500px]">
+              {/* Mandatory Fullscreen Proctoring Overlay */}
+              {!isFullscreenOn && (
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md z-[100] flex flex-col items-center justify-center p-8 text-center text-white">
+                  <div className="max-w-md space-y-6 animate-fade-in">
+                    <div className="w-16 h-16 rounded-full bg-rose-500/20 text-rose-500 flex items-center justify-center mx-auto border border-rose-500/30">
+                      <ShieldAlert className="w-8 h-8 animate-pulse" />
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold tracking-tight">Mode Plein Écran Obligatoire</h3>
+                      <p className="text-sm text-slate-400 leading-relaxed">
+                        Pour garantir l'équité et l'intégrité de l'évaluation, vous devez impérativement rester en mode plein écran.
+                        La sortie du plein écran ou le changement d'onglet est enregistré comme une anomalie par le système d'E-Proctoring.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleFullscreen}
+                      className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition cursor-pointer flex items-center justify-center gap-2 mx-auto hover:scale-105 active:scale-95 duration-150"
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                      <span>Réactiver le mode Plein Écran</span>
+                    </button>
+                  </div>
+                </div>
+              )}
               {/* Header with Progress Bar */}
               <div className="bg-slate-900 text-white p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative">
                 <div>
@@ -2204,8 +2322,16 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       const ex = examToStart;
-                      setExamToStart(null);
-                      proceedStartExamQuiz(ex);
+                      if (ex) {
+                        const el = document.documentElement;
+                        if (el.requestFullscreen) {
+                          el.requestFullscreen()
+                            .then(() => setIsFullscreenOn(true))
+                            .catch((err) => console.log("Fullscreen request failed", err));
+                        }
+                        setExamToStart(null);
+                        proceedStartExamQuiz(ex);
+                      }
                     }}
                     className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md hover:shadow-lg transition cursor-pointer flex items-center justify-center space-x-1"
                   >
@@ -2540,139 +2666,318 @@ export default function App() {
                 </div>
               )}
 
-              {/* Enrolled Courses & Exams Lists */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                
-                {/* Courses block for Student */}
-                <div className="bg-white rounded-2xl border border-slate-100 p-6">
-                  <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                    <BookOpen className="w-5 h-5 text-indigo-600" />
-                    <span>Mes Cours Actifs</span>
-                  </h3>
+              {/* STUDENT TAB BAR SELECTOR */}
+              <div className="flex space-x-2 border-b border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setStudentTab('activities')}
+                  className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors ${
+                    studentTab === 'activities' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  📋 Mes Évaluations & Cours
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentTab('analytics');
+                    fetchStudentAnalytics();
+                  }}
+                  className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
+                    studentTab === 'analytics' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <span>📊 Mon Tableau de Bord & Progression IA</span>
+                </button>
+              </div>
 
-                  {courses.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400">
-                      <BookOpen className="w-12 h-12 mx-auto stroke-1 mb-2 text-slate-300" />
-                      <p className="text-xs">Aucun cours inscrit actuellement. Entrez un code de cours ci-dessus pour y adhérer.</p>
+              {studentTab === 'activities' && (
+                <>
+                  {/* Enrolled Courses & Exams Lists */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    
+                    {/* Courses block for Student */}
+                    <div className="bg-white rounded-2xl border border-slate-100 p-6">
+                      <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                        <BookOpen className="w-5 h-5 text-indigo-600" />
+                        <span>Mes Cours Actifs</span>
+                      </h3>
+
+                      {courses.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400">
+                          <BookOpen className="w-12 h-12 mx-auto stroke-1 mb-2 text-slate-300" />
+                          <p className="text-xs">Aucun cours inscrit actuellement. Entrez un code de cours ci-dessus pour y adhérer.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {courses.map((course) => (
+                            <div
+                              key={course.id}
+                              className="p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition"
+                            >
+                              <div className="flex justify-between items-start gap-4">
+                                <div>
+                                  <h4 className="text-sm font-bold text-slate-900">{course.title}</h4>
+                                  <p className="text-xs text-slate-500 mt-1 line-clamp-2">{course.description}</p>
+                                </div>
+                                <span className="text-[10px] bg-slate-200/60 font-mono tracking-wider font-bold text-slate-600 px-2 py-0.5 rounded uppercase">
+                                  Code: {course.code}
+                                </span>
+                              </div>
+
+                              <div className="mt-3 pt-3 border-t border-slate-200/50 flex justify-between items-center text-[11px] text-slate-400">
+                                <span>Cours géré par {course.teacherName}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Available Exams for student */}
+                    <div className="bg-white rounded-2xl border border-slate-100 p-6">
+                      <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                        <Play className="w-5 h-5 text-emerald-600" />
+                        <span>Sessions d'Examens Moodle Disponibles</span>
+                      </h3>
+
+                      {courses.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400">
+                          <p className="text-xs">Inscrivez-vous à un cours pour visualiser les devoirs programmés.</p>
+                        </div>
+                      ) : (
+                        <StudentExamsListView courses={courses} onStartExam={startExamQuiz} studentSubmissions={studentSubmissions} />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Historiques des examens passés */}
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6">
+                    <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                      <Award className="w-5 h-5 text-indigo-600" />
+                      <span>Historique des Évaluations & Notes Moodle</span>
+                    </h3>
+
+                    {studentSubmissions.length === 0 ? (
+                      <p className="text-xs text-slate-400 text-center py-8">Aucun examen n'a encore été soumis.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-slate-600">
+                          <thead className="bg-slate-50 text-slate-500 uppercase font-mono text-[9px] tracking-wider border-b border-slate-100">
+                            <tr>
+                              <th className="p-3 font-bold">Examen</th>
+                              <th className="p-3 font-bold">Cours</th>
+                              <th className="p-3 font-bold">Date de Remise</th>
+                              <th className="p-3 font-bold text-center">Statut Correction</th>
+                              <th className="p-3 font-bold text-right">Note de Synthèse</th>
+                              <th className="p-3 font-bold text-center">Rapport PDF</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {studentSubmissions.map((sub) => (
+                              <tr key={sub.id} className="hover:bg-slate-50 transition">
+                                <td className="p-3 font-semibold text-slate-950">{sub.examTitle}</td>
+                                <td className="p-3 text-slate-500">{sub.courseTitle}</td>
+                                <td className="p-3 font-mono text-slate-400">
+                                  {new Date(sub.submittedAt).toLocaleDateString("fr-FR")} {new Date(sub.submittedAt).toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' })}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {sub.score === null ? (
+                                    <span className="bg-amber-50 text-amber-800 border border-amber-100 px-2 py-0.5 rounded text-[10px] font-semibold">
+                                      🖋️ Correction en cours
+                                    </span>
+                                  ) : (
+                                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-0.5 rounded text-[10px] font-semibold">
+                                      ✓ Corrigé & Notifié
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-right font-bold text-slate-900 text-sm">
+                                  {sub.score === null ? (
+                                    <span className="text-slate-400 font-mono">En attente</span>
+                                  ) : (
+                                    <span>{sub.score} pt{sub.score > 1 ? "s" : ""}</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center flex items-center justify-center space-x-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewSubmissionDetails(sub)}
+                                    className="inline-flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-3 rounded-lg transition cursor-pointer"
+                                    title="Consulter la copie de l'évaluation avec explications IA"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Consulter & IA</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadPDF(sub)}
+                                    className="inline-flex items-center space-x-1 bg-slate-100 hover:bg-slate-200/80 text-slate-705 font-bold py-1.5 px-3 rounded-lg border border-slate-200 transition cursor-pointer"
+                                    title="Télécharger le récapitulatif officiel au format PDF"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>Télécharger</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {studentTab === 'analytics' && (
+                <div className="space-y-8 animate-fade-in">
+                  {loadingStudentAnalytics ? (
+                    <div className="py-20 flex flex-col items-center justify-center text-center space-y-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-150 dark:border-slate-800 shadow-2xs">
+                      <div className="relative">
+                        <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                        <Sparkles className="w-5 h-5 text-indigo-500 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 animate-pulse" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-800 dark:text-white">Analyse de vos performances académiques...</p>
+                        <p className="text-xs text-slate-400 mt-1">L'IA EduQuiz compile vos réponses et statistiques de surveillance</p>
+                      </div>
+                    </div>
+                  ) : !studentAnalytics || studentAnalytics.stats?.examsTaken === 0 ? (
+                    <div className="py-16 flex flex-col items-center justify-center text-center space-y-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-150 dark:border-slate-800 shadow-2xs">
+                      <div className="p-4 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-full">
+                        <TrendingUp className="w-10 h-10 stroke-1" />
+                      </div>
+                      <div className="max-w-md">
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-white">Votre tableau de bord est prêt !</h3>
+                        <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                          Une fois votre première évaluation Moodle validée, vous découvrirez ici votre courbe de progression, vos forces thématiques, et des conseils personnalisés par IA.
+                        </p>
+                      </div>
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      {courses.map((course) => (
-                        <div
-                          key={course.id}
-                          className="p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition"
-                        >
-                          <div className="flex justify-between items-start gap-4">
-                            <div>
-                              <h4 className="text-sm font-bold text-slate-900">{course.title}</h4>
-                              <p className="text-xs text-slate-500 mt-1 line-clamp-2">{course.description}</p>
-                            </div>
-                            <span className="text-[10px] bg-slate-200/60 font-mono tracking-wider font-bold text-slate-600 px-2 py-0.5 rounded uppercase">
-                              Code: {course.code}
-                            </span>
+                    <div className="space-y-8">
+                      {/* Student Analytics Metrics Cards */}
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-indigo-100/80 dark:border-slate-700/80">
+                          <span className="text-[10px] font-mono font-bold text-indigo-500 dark:text-indigo-400 uppercase">MA MOYENNE GENERALE</span>
+                          <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">
+                            {studentAnalytics.stats.avgScore} <span className="text-sm font-normal text-slate-500">/ 20</span>
                           </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Moyenne de toutes vos épreuves</p>
+                        </div>
 
-                          <div className="mt-3 pt-3 border-t border-slate-200/50 flex justify-between items-center text-[11px] text-slate-400">
-                            <span>Cours géré par {course.teacherName}</span>
+                        <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-emerald-100/80 dark:border-slate-700/80">
+                          <span className="text-[10px] font-mono font-bold text-emerald-500 dark:text-emerald-400 uppercase">TAUX DE REUSSITE</span>
+                          <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">
+                            {studentAnalytics.stats.passingRate}%
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Examens avec note &ge; 10/20</p>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-amber-100/80 dark:border-slate-700/80">
+                          <span className="text-[10px] font-mono font-bold text-amber-500 dark:text-amber-400 uppercase">MEILLEURE NOTE</span>
+                          <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">
+                            {studentAnalytics.stats.bestScore} <span className="text-sm font-normal text-slate-500">/ 20</span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Votre plus grand succès !</p>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-purple-50 to-purple-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-purple-100/80 dark:border-slate-700/80">
+                          <span className="text-[10px] font-mono font-bold text-purple-500 dark:text-purple-400 uppercase">INDICE DE FOCUS</span>
+                          <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">
+                            {100 - (studentAnalytics.proctoring?.avgSuspicionScore || 0)}%
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                            {studentAnalytics.proctoring?.avgSuspicionScore < 20 
+                              ? "Excellent focus (Intégrité OK)" 
+                              : studentAnalytics.proctoring?.avgSuspicionScore < 50 
+                                ? "Focus modéré (Intégrité OK)" 
+                                : "Attention aux distractions !"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Charts row */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Line progression chart */}
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
+                          <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
+                            <TrendingUp className="w-4 h-4 text-indigo-600" />
+                            <span>📈 Courbe de progression des notes</span>
+                          </h3>
+                          <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Évolution de vos résultats (notes normalisées sur 20)</p>
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={studentAnalytics.progress}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                                <XAxis dataKey="examTitle" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                                <YAxis domain={[0, 20]} stroke="#94a3b8" fontSize={11} tickLine={false} />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="normalizedScore" stroke="#4f46e5" strokeWidth={3} activeDot={{ r: 8 }} name="Note obtenue" />
+                              </LineChart>
+                            </ResponsiveContainer>
                           </div>
                         </div>
-                      ))}
+
+                        {/* Radar competency profile */}
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
+                          <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
+                            <Award className="w-4 h-4 text-emerald-600" />
+                            <span>🕸️ Mon profil de compétences thématiques</span>
+                          </h3>
+                          <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Pourcentage de maîtrise par catégorie de questions</p>
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <RadarChart cx="50%" cy="50%" outerRadius="75%" data={studentAnalytics.themes.map((t: any) => ({ ...t, A: t.percentage }))}>
+                                <PolarGrid stroke="#e2e8f0" />
+                                <PolarAngleAxis dataKey="subject" stroke="#64748b" fontSize={9} />
+                                <PolarRadiusAxis angle={30} domain={[0, 100]} stroke="#cbd5e1" fontSize={8} />
+                                <Radar name="Ma Maîtrise" dataKey="A" stroke="#10b981" fill="#34d399" fillOpacity={0.3} />
+                                <Tooltip />
+                              </RadarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AI Recommendations box */}
+                      <div className="bg-gradient-to-r from-indigo-900 to-indigo-950 text-white rounded-3xl p-6 md:p-8 shadow-xl relative overflow-hidden">
+                        <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-10 translate-y-10">
+                          <Brain className="w-72 h-72" />
+                        </div>
+
+                        <div className="relative z-10 space-y-4">
+                          <div className="flex items-center space-x-2">
+                            <div className="p-1.5 bg-indigo-500/30 border border-indigo-400/30 text-amber-300 rounded-lg">
+                              <Sparkles className="w-5 h-5 animate-pulse" />
+                            </div>
+                            <h3 className="text-lg font-bold">Conseils & Recommandations d'Apprentissage IA</h3>
+                          </div>
+                          <p className="text-xs text-indigo-200 leading-relaxed max-w-2xl">
+                            Notre système d'intelligence artificielle a analysé l'intégralité de vos réponses pour identifier vos forces thématiques et concevoir un programme de soutien personnalisé.
+                          </p>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            {studentAnalytics.recommendations.map((rec: string, index: number) => {
+                              const text = rec.replace(/\*\*/g, '');
+                              return (
+                                <div key={index} className="bg-white/10 backdrop-blur-xs border border-white/10 p-4 rounded-2xl flex items-start space-x-3">
+                                  <div className="mt-0.5 text-base shrink-0">
+                                    {text.startsWith('💡') ? '💡' : text.startsWith('🏆') ? '🏆' : text.startsWith('🧠') ? '🧠' : '📖'}
+                                  </div>
+                                  <p className="text-xs text-white/90 leading-relaxed">
+                                    {text.replace(/^[💡🏆🧠📖]\s*/, '')}
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
-
-                {/* Available Exams for student */}
-                <div className="bg-white rounded-2xl border border-slate-100 p-6">
-                  <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                    <Play className="w-5 h-5 text-emerald-600" />
-                    <span>Sessions d'Examens Moodle Disponibles</span>
-                  </h3>
-
-                  {courses.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400">
-                      <p className="text-xs">Inscrivez-vous à un cours pour visualiser les devoirs programmés.</p>
-                    </div>
-                  ) : (
-                    <StudentExamsListView courses={courses} onStartExam={startExamQuiz} studentSubmissions={studentSubmissions} />
-                  )}
-                </div>
-              </div>
-
-              {/* Historiques des examens passés */}
-              <div className="bg-white rounded-2xl border border-slate-100 p-6">
-                <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                  <Award className="w-5 h-5 text-indigo-600" />
-                  <span>Historique des Évaluations & Notes Moodle</span>
-                </h3>
-
-                {studentSubmissions.length === 0 ? (
-                  <p className="text-xs text-slate-400 text-center py-8">Aucun examen n'a encore été soumis.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs text-slate-600">
-                      <thead className="bg-slate-50 text-slate-500 uppercase font-mono text-[9px] tracking-wider border-b border-slate-100">
-                        <tr>
-                          <th className="p-3 font-bold">Examen</th>
-                          <th className="p-3 font-bold">Cours</th>
-                          <th className="p-3 font-bold">Date de Remise</th>
-                          <th className="p-3 font-bold text-center">Statut Correction</th>
-                          <th className="p-3 font-bold text-right">Note de Synthèse</th>
-                          <th className="p-3 font-bold text-center">Rapport PDF</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {studentSubmissions.map((sub) => (
-                          <tr key={sub.id} className="hover:bg-slate-50 transition">
-                            <td className="p-3 font-semibold text-slate-950">{sub.examTitle}</td>
-                            <td className="p-3 text-slate-500">{sub.courseTitle}</td>
-                            <td className="p-3 font-mono text-slate-400">
-                              {new Date(sub.submittedAt).toLocaleDateString("fr-FR")} {new Date(sub.submittedAt).toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' })}
-                            </td>
-                            <td className="p-3 text-center">
-                              {sub.score === null ? (
-                                <span className="bg-amber-50 text-amber-800 border border-amber-100 px-2 py-0.5 rounded text-[10px] font-semibold">
-                                  🖋️ Correction en cours
-                                </span>
-                              ) : (
-                                <span className="bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-0.5 rounded text-[10px] font-semibold">
-                                  ✓ Corrigé & Notifié
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right font-bold text-slate-900 text-sm">
-                              {sub.score === null ? (
-                                <span className="text-slate-400 font-mono">En attente</span>
-                              ) : (
-                                <span>{sub.score} pt{sub.score > 1 ? "s" : ""}</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-center flex items-center justify-center space-x-2">
-                              <button
-                                type="button"
-                                onClick={() => handleViewSubmissionDetails(sub)}
-                                className="inline-flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-3 rounded-lg transition cursor-pointer"
-                                title="Consulter la copie de l'évaluation avec explications IA"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Consulter & IA</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadPDF(sub)}
-                                className="inline-flex items-center space-x-1 bg-slate-100 hover:bg-slate-200/80 text-slate-705 font-bold py-1.5 px-3 rounded-lg border border-slate-200 transition cursor-pointer"
-                                title="Télécharger le récapitulatif officiel au format PDF"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                <span>Télécharger</span>
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+              )}
 
             </div>
           )}
@@ -2680,7 +2985,21 @@ export default function App() {
           {/* ========================================================
               TEACHER WORKSPACE: ACTIVE COURSES & GENERATORS 
              ======================================================== */}
-          {user.role === "teacher" && (
+          {user.role === "teacher" && activeTab === "moodle_editor" && (
+            <div className="space-y-8 animate-fade-in">
+              <MoodleEditor
+                courses={courses}
+                exams={exams}
+                activeCourse={activeCourse}
+                onUpdateExams={setExams}
+                onSelectExam={setActiveExam}
+                triggerToast={triggerToast}
+                darkMode={darkMode}
+              />
+            </div>
+          )}
+
+          {user.role === "teacher" && activeTab !== "moodle_editor" && (
             <div className="space-y-8 animate-fade-in">
               
               {/* Back to Courses List Navigation if active */}
@@ -2702,11 +3021,143 @@ export default function App() {
 
               {/* LIST OF COURSES IF NONE SELECTED */}
               {!activeCourse && (
-                <div className="space-y-6">
+                <div className="space-y-8">
+                  {/* Visual 4-Modules Pedagogical Center */}
+                  <div className="bg-slate-50 dark:bg-slate-800/40 rounded-3xl p-6 border border-slate-200/60 dark:border-slate-800/80 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-slate-800 pb-3">
+                      <div>
+                        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-100 dark:border-indigo-900/40">
+                          Espace Pédagogique Actif
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-850 dark:text-slate-100 mt-1">
+                          Vos 04 Nouveaux Modules Intégrés EduQuiz AI
+                        </h3>
+                      </div>
+                      <span className="text-xs text-slate-400 font-mono">Status: Opérationnel ⚡</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {/* Module 1: Générateur IA */}
+                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
+                        <div className="space-y-2">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                            <Sparkles className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">1. Générateur d'Examens IA</h4>
+                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
+                              Génération instantanée de quiz complexes (Moodle Quiz) basés sur vos sujets, corrigés et barèmes pédagogiques.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                          {courses.length === 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCreatingCourse(true);
+                                triggerToast("Créez d'abord un cours pour y attacher vos examens générés par l'IA.", "info");
+                              }}
+                              className="w-full text-center bg-indigo-55/15 hover:bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 py-1 rounded text-[10px] font-bold transition cursor-pointer"
+                            >
+                              + Créer un cours d'abord
+                            </button>
+                          ) : (
+                            <div className="space-y-1">
+                              <label className="block text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase">Lancer pour la classe :</label>
+                              <select
+                                onChange={(e) => {
+                                  const cId = e.target.value;
+                                  if (!cId) return;
+                                  const selected = courses.find(c => c.id === cId);
+                                  if (selected) {
+                                    selectCourse(selected);
+                                    setIsCreatingExam(true);
+                                    triggerToast(`Générateur IA ouvert pour le cours : ${selected.title}`, "success");
+                                  }
+                                }}
+                                className="w-full text-[10px] p-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-hidden"
+                                defaultValue=""
+                              >
+                                <option value="" disabled>-- Choisir un cours --</option>
+                                {courses.map(c => (
+                                  <option key={c.id} value={c.id}>{c.title}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Module 2: Éditeur Scientifique & Cloze */}
+                      <button
+                        onClick={() => setActiveTab("moodle_editor")}
+                        className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between text-left shadow-xs hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-900 transition cursor-pointer"
+                      >
+                        <div className="space-y-2">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                            <Edit3 className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-1.5">
+                              <span>2. Éditeur de Questions Scientifique & Cloze Intégré</span>
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            </h4>
+                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
+                              Saisie simplifiée de formules complexes LaTeX ($$\int f(x) dx$$) et assistant de syntaxe Cloze (Texte à trous) Moodle.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 w-full flex justify-between items-center text-[10px]">
+                          <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">Accéder à l'éditeur</span>
+                          <span className="text-indigo-600 dark:text-indigo-400 font-bold">Ouvrir l'onglet →</span>
+                        </div>
+                      </button>
+
+                      {/* Module 3: Surveillance E-Proctoring */}
+                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
+                        <div className="space-y-2">
+                          <div className="w-8 h-8 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                            <ShieldAlert className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">3. Surveillance E-Proctoring</h4>
+                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
+                              Proctoring en temps réel : webcam, sons anormaux, blocage du copier-coller et avertissements intelligents.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400 font-mono">Module 3</span>
+                          <span className="text-rose-600 dark:text-rose-400 font-bold">Intégré par défaut dans l'examen</span>
+                        </div>
+                      </div>
+
+                      {/* Module 4: Analyses & Statistiques */}
+                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
+                        <div className="space-y-2">
+                          <div className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                            <TrendingUp className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">4. Analyses & Export de Notes</h4>
+                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
+                              Analyse de réussite par classe, export des notes compatible Excel/Moodle, et courbes de progression.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400 font-mono">Module 4</span>
+                          <span className="text-amber-650 dark:text-amber-400 font-bold">Disponible par examen</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex justify-between items-center">
                     <div>
-                      <h2 className="text-xl font-sans font-bold text-slate-900 tracking-tight">Mes Salles de Classes & Cours</h2>
-                      <p className="text-xs text-slate-500">Gérez vos supports d'enseignement et générez des Quiz Moodle</p>
+                      <h2 className="text-xl font-sans font-bold text-slate-900 dark:text-white tracking-tight">Mes Salles de Classes & Cours</h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-450">Gérez vos supports d'enseignement et générez des Quiz Moodle</p>
                     </div>
 
                     <button
@@ -3008,20 +3459,23 @@ export default function App() {
 
                       <button
                         onClick={() => setIsCreatingExam(true)}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs transition flex items-center space-x-1 cursor-pointer"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
                       >
-                        <Plus className="w-4 h-4" />
-                        <span>Créer un Examen</span>
+                        <Sparkles className="w-4 h-4" />
+                        <span>Générateur d'Examens IA & Moodle</span>
                       </button>
                     </div>
                   </div>
 
                   {/* Create Exam Form Modal Wrapper */}
                   {isCreatingExam && (
-                    <form onSubmit={handleCreateExam} className="bg-white rounded-2xl p-6 border border-indigo-100 shadow-md space-y-4 max-w-3xl">
+                    <form onSubmit={handleCreateExam} className="bg-white rounded-2xl p-6 border border-indigo-100 shadow-md space-y-4 max-w-3xl animate-fade-in">
                       <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                         <div>
-                          <h3 className="font-bold text-sm text-slate-900">Générer un nouvel examen de type Moodle</h3>
+                          <h3 className="font-bold text-sm text-slate-900 flex items-center">
+                            <Sparkles className="w-4 h-4 text-indigo-600 mr-1.5" />
+                            <span>Générateur d'Examens IA & Moodle Quiz</span>
+                          </h3>
                           <p className="text-xs text-slate-400">L'IA convertira votre document en questions à choix multiples, appariements, etc.</p>
                         </div>
                         <button type="button" onClick={() => setIsCreatingExam(false)} className="text-slate-400 hover:text-slate-700">
@@ -3555,6 +4009,14 @@ export default function App() {
                         <span className="w-2 h-2 rounded-full bg-emerald-500 ml-1"></span>
                       )}
                     </button>
+                    <button
+                      onClick={() => setTeacherExamTab('analytics')}
+                      className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
+                        teacherExamTab === 'analytics' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <span>📊 Analyses & Statistiques</span>
+                    </button>
                   </div>
 
                   {teacherExamTab === 'editor' && (
@@ -3808,6 +4270,19 @@ export default function App() {
                               rows={3}
                             />
                           </div>
+
+                          {newQType === "cloze" && (
+                            <div className="p-4 bg-indigo-50/50 dark:bg-slate-850 rounded-2xl border border-indigo-100 dark:border-slate-800 text-xs space-y-1.5 animate-fade-in">
+                              <span className="font-bold text-indigo-900 dark:text-indigo-400 block">Aide syntaxe Cloze Moodle</span>
+                              <p className="text-[11px] text-slate-500 leading-relaxed">
+                                Saisissez votre texte avec des choix d'options délimitées par des accolades ou barres verticales :
+                                <br />
+                                <code className="bg-white dark:bg-slate-900 px-1 py-0.5 rounded font-mono text-indigo-700">L'apprentissage stochastique est {"{rapide|lent|inexistant}"}.</code>
+                                <br />
+                                La bonne réponse doit être stockée dans la case "Réponse attendue exacte" ci-dessous.
+                              </p>
+                            </div>
+                          )}
 
                           {/* Options only for MCQ or Matching left items */}
                           {(newQType === "mcq" || newQType === "matching") && (
@@ -4202,6 +4677,294 @@ export default function App() {
 
                   </div>
                   )}
+
+                  {teacherExamTab === 'analytics' && (() => {
+                    const examSubmissions = submissions.filter(s => s.examId === activeExam.id);
+                    const gradedSubmissions = examSubmissions.filter(s => s.score !== null);
+                    const examQuestions = questions.filter(q => q.type !== "description");
+                    const totalPoints = examQuestions.reduce((sum, q) => sum + (q.points || 1), 0);
+                    const normalizedScores = gradedSubmissions.map(s => (s.score / (totalPoints || 1)) * 20);
+                    const classAverage = normalizedScores.length > 0 ? parseFloat((normalizedScores.reduce((sum, score) => sum + score, 0) / normalizedScores.length).toFixed(1)) : 0;
+                    const maxScore = normalizedScores.length > 0 ? parseFloat(Math.max(...normalizedScores).toFixed(1)) : 0;
+                    const minScore = normalizedScores.length > 0 ? parseFloat(Math.min(...normalizedScores).toFixed(1)) : 0;
+                    const passRate = normalizedScores.length > 0 ? parseFloat(((normalizedScores.filter(s => s >= 10).length / normalizedScores.length) * 100).toFixed(1)) : 0;
+
+                    const ranges = [
+                      { name: "[0-5[", count: 0 },
+                      { name: "[5-10[", count: 0 },
+                      { name: "[10-12[", count: 0 },
+                      { name: "[12-14[", count: 0 },
+                      { name: "[14-16[", count: 0 },
+                      { name: "[16-18[", count: 0 },
+                      { name: "[18-20]", count: 0 }
+                    ];
+                    normalizedScores.forEach(score => {
+                      if (score < 5) ranges[0].count++;
+                      else if (score < 10) ranges[1].count++;
+                      else if (score < 12) ranges[2].count++;
+                      else if (score < 14) ranges[3].count++;
+                      else if (score < 16) ranges[4].count++;
+                      else if (score < 18) ranges[5].count++;
+                      else ranges[6].count++;
+                    });
+
+                    const questionSuccessData = questions.map((q, idx) => {
+                      if (q.type === "description") return null;
+                      let correctCount = 0;
+                      let totalAttempts = 0;
+
+                      examSubmissions.forEach(sub => {
+                        totalAttempts++;
+                        const studentAns = sub.answers[q.id];
+                        if (q.type === "essay") {
+                          const feed = sub.essayFeedbacks?.[q.id];
+                          if (feed && feed.score >= (q.points || 1) / 2) {
+                            correctCount++;
+                          }
+                        } else {
+                          let isCorrect = false;
+                          if (studentAns !== undefined && studentAns !== null) {
+                            if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
+                              isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
+                            } else if (q.type === "matching") {
+                              try {
+                                let matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
+                                let matches = 0;
+                                const opts = q.options || [];
+                                const targets = q.matchingTargets || [];
+                                opts.forEach((key: string, idxKey: number) => {
+                                  if (matchingMap && matchingMap[key] === targets[idxKey]) matches++;
+                                });
+                                if (opts.length > 0 && matches / opts.length >= 0.5) {
+                                  isCorrect = true;
+                                }
+                              } catch (_) {}
+                            }
+                          }
+                          if (isCorrect) correctCount++;
+                        }
+                      });
+
+                      const successRate = totalAttempts > 0 ? Math.round((correctCount / totalAttempts) * 100) : 0;
+                      return {
+                        id: q.id,
+                        label: `Q${idx + 1}`,
+                        statement: q.statement,
+                        theme: getQuestionTheme(q),
+                        successRate,
+                        type: q.type
+                      };
+                    }).filter(Boolean);
+
+                    const classThemeScores: Record<string, { obtained: number; total: number }> = {
+                      "Théorie & Concepts": { obtained: 0, total: 0 },
+                      "Logique & Diagnostic": { obtained: 0, total: 0 },
+                      "Appariement & Syntaxe": { obtained: 0, total: 0 },
+                      "Calculs & Analyse": { obtained: 0, total: 0 },
+                      "Démonstration & Rédaction": { obtained: 0, total: 0 }
+                    };
+                    examSubmissions.forEach(sub => {
+                      questions.forEach(q => {
+                        const theme = getQuestionTheme(q);
+                        if (classThemeScores[theme]) {
+                          classThemeScores[theme].total += q.points || 1;
+                          const studentAns = sub.answers[q.id];
+                          if (q.type === "essay") {
+                            const feed = sub.essayFeedbacks?.[q.id];
+                            if (feed && feed.score !== undefined) {
+                              classThemeScores[theme].obtained += feed.score;
+                            }
+                          } else if (q.type === "description") {
+                            // skip
+                          } else {
+                            let isCorrect = false;
+                            if (studentAns !== undefined && studentAns !== null) {
+                              if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
+                                isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
+                              } else if (q.type === "matching") {
+                                try {
+                                  let matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
+                                  let matches = 0;
+                                  const opts = q.options || [];
+                                  const targets = q.matchingTargets || [];
+                                  opts.forEach((key: string, idxKey: number) => {
+                                    if (matchingMap && matchingMap[key] === targets[idxKey]) matches++;
+                                  });
+                                  if (opts.length > 0 && matches / opts.length >= 0.5) {
+                                    isCorrect = true;
+                                  }
+                                } catch (_) {}
+                              }
+                            }
+                            if (isCorrect) {
+                              classThemeScores[theme].obtained += q.points || 1;
+                            }
+                          }
+                        }
+                      });
+                    });
+
+                    const classThemesData = Object.keys(classThemeScores).map(theme => {
+                      const { obtained, total } = classThemeScores[theme];
+                      return {
+                        subject: theme,
+                        A: total > 0 ? Math.round((obtained / total) * 100) : 0,
+                        fullMark: 100
+                      };
+                    });
+
+                    return (
+                      <div className="space-y-8 mt-6 animate-fade-in">
+                        {/* Summary metrics row */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                          <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-indigo-100/80 dark:border-slate-700/80">
+                            <span className="text-[10px] font-mono font-bold text-indigo-500 dark:text-indigo-400 uppercase">MOYENNE DE CLASSE</span>
+                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{classAverage} <span className="text-sm font-normal text-slate-500 dark:text-slate-400">/ 20</span></div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Moyenne des notes sur 20</p>
+                          </div>
+
+                          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-emerald-100/80 dark:border-slate-700/80">
+                            <span className="text-[10px] font-mono font-bold text-emerald-500 dark:text-emerald-400 uppercase">TAUX DE REUSSITE</span>
+                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{passRate}%</div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">Moyenne &ge; 10/20</p>
+                          </div>
+
+                          <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-amber-100/80 dark:border-slate-700/80">
+                            <span className="text-[10px] font-mono font-bold text-amber-500 dark:text-amber-400 uppercase">NOTE MAX / MIN</span>
+                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{maxScore} <span className="text-xs text-slate-400 font-normal">/ {minScore}</span></div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Notes extrêmes obtenues</p>
+                          </div>
+
+                          <div className="bg-gradient-to-br from-slate-50 to-slate-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
+                            <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-slate-400 uppercase">PARTICIPATION</span>
+                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{examSubmissions.length}</div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">{gradedSubmissions.length} copies corrigées</p>
+                          </div>
+                        </div>
+
+                        {/* Charts Grid */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                          {/* Distribution des notes */}
+                          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
+                            <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
+                              <span>📊 Distribution des notes</span>
+                            </h3>
+                            <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Répartition des étudiants par tranches de notes (normalisées sur 20)</p>
+                            <div className="h-64 w-full">
+                              {gradedSubmissions.length === 0 ? (
+                                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Aucune donnée disponible. Les étudiants doivent d'abord soumettre leurs examens.</div>
+                              ) : (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <BarChart data={ranges}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                    <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                                    <YAxis stroke="#94a3b8" fontSize={11} allowDecimals={false} tickLine={false} />
+                                    <Tooltip cursor={{ fill: '#f8fafc' }} />
+                                    <Bar dataKey="count" fill="#4f46e5" radius={[4, 4, 0, 0]} name="Nombre d'étudiants" />
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Radar thématique classe */}
+                          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
+                            <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
+                              <span>🕸️ Profil de compétences de la classe</span>
+                            </h3>
+                            <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Taux de réussite moyen de la classe (%) par thématique d'évaluation</p>
+                            <div className="h-64 w-full">
+                              {gradedSubmissions.length === 0 ? (
+                                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Aucune donnée disponible</div>
+                              ) : (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <RadarChart cx="50%" cy="50%" outerRadius="75%" data={classThemesData}>
+                                    <PolarGrid stroke="#e2e8f0" />
+                                    <PolarAngleAxis dataKey="subject" stroke="#64748b" fontSize={9} />
+                                    <PolarRadiusAxis angle={30} domain={[0, 100]} stroke="#cbd5e1" fontSize={8} />
+                                    <Radar name="Classe" dataKey="A" stroke="#4f46e5" fill="#818cf8" fillOpacity={0.3} />
+                                    <Tooltip />
+                                  </RadarChart>
+                                </ResponsiveContainer>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Analysis per question */}
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
+                          <div className="flex justify-between items-center mb-4">
+                            <div>
+                              <h3 className="text-sm font-bold text-slate-800 dark:text-white">🔍 Taux de réussite par question</h3>
+                              <p className="text-xs text-slate-400 dark:text-slate-450">Pourcentage d'étudiants ayant validé chaque question de l'évaluation</p>
+                            </div>
+                          </div>
+
+                          {gradedSubmissions.length === 0 ? (
+                            <div className="py-8 text-center text-xs text-slate-400 italic">Aucune copie à analyser.</div>
+                          ) : (
+                            <div className="space-y-4">
+                              <div className="h-48 w-full">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <BarChart data={questionSuccessData} layout="vertical">
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                                    <XAxis type="number" domain={[0, 100]} stroke="#94a3b8" fontSize={11} tickFormatter={(v) => `${v}%`} tickLine={false} />
+                                    <YAxis type="category" dataKey="label" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                                    <Tooltip formatter={(v) => [`${v}%`, 'Taux de réussite']} />
+                                    <Bar dataKey="successRate" radius={[0, 4, 4, 0]} name="Taux de réussite">
+                                      {questionSuccessData.map((entry: any, index: number) => {
+                                        let color = '#10b981';
+                                        if (entry.successRate < 40) color = '#f43f5e';
+                                        else if (entry.successRate < 70) color = '#f59e0b';
+                                        return <Cell key={`cell-${index}`} fill={color} />;
+                                      })}
+                                    </Bar>
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              <div className="overflow-x-auto mt-4">
+                                <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300 border-collapse">
+                                  <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-850 uppercase tracking-wider text-[10px] font-bold text-slate-400">
+                                    <tr>
+                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Question</th>
+                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Thématique</th>
+                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Type</th>
+                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850 text-center">Taux de Réussite</th>
+                                      <th className="px-4 py-2">Statut Didactique</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {questionSuccessData.map((item: any) => (
+                                      <tr key={item.id} className="border-b border-slate-100 dark:border-slate-850 hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
+                                        <td className="px-4 py-2.5 font-bold text-slate-800 dark:text-white border-r border-slate-100 dark:border-slate-850">{item.label}</td>
+                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-slate-500 dark:text-slate-400 font-medium">{item.theme}</td>
+                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-slate-500 dark:text-slate-400 font-mono text-[10px] uppercase">{item.type}</td>
+                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-center font-bold">
+                                          <span className={item.successRate < 40 ? "text-rose-600" : item.successRate < 70 ? "text-amber-600" : "text-emerald-600"}>
+                                            {item.successRate}%
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400">
+                                          {item.successRate < 40 ? (
+                                            <span className="text-rose-600 font-medium">⚠️ À retravailler d'urgence (Mal compris)</span>
+                                          ) : item.successRate < 70 ? (
+                                            <span className="text-amber-600 font-medium">💡 Compréhension partielle (À consolider)</span>
+                                          ) : (
+                                            <span className="text-emerald-600 font-medium">✅ Compétence acquise par la classe</span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {teacherExamTab === 'monitoring' && (
                     <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs mt-6">
