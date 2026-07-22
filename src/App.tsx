@@ -3280,14 +3280,30 @@ export default function App() {
             <div className="space-y-8">
               {!activeCourse ? (
                 <div className="bg-white rounded-2xl border border-slate-100 p-6">
-                  <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                    <BookOpen className="w-5 h-5 text-indigo-600" />
-                    <span>Mes Cours Gérés</span>
-                  </h3>
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
+                      <BookOpen className="w-5 h-5 text-indigo-600" />
+                      <span>Mes Cours Gérés</span>
+                    </h3>
+                    <button
+                      onClick={() => setIsCreatingCourse(true)}
+                      className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Créer un cours</span>
+                    </button>
+                  </div>
                   {courses.length === 0 ? (
                     <div className="text-center py-12 text-slate-400">
                       <BookOpen className="w-12 h-12 mx-auto stroke-1 mb-2 text-slate-300" />
-                      <p className="text-xs">Aucun cours créé. Utilisez l editeur Moodle pour créer votre premier cours.</p>
+                      <p className="text-xs mb-4">Aucun cours créé pour le moment.</p>
+                      <button
+                        onClick={() => setIsCreatingCourse(true)}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition inline-flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Créer mon premier cours</span>
+                      </button>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3624,6 +3640,92 @@ export default function App() {
                   Fermer
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* CREATE COURSE DIALOG MODAL */}
+      <AnimatePresence>
+        {isCreatingCourse && (
+          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 max-w-md w-full space-y-4"
+            >
+              <div className="flex justify-between items-start">
+                <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400">
+                  <BookOpen className="w-5 h-5 shrink-0" />
+                  <h3 className="text-base font-bold text-slate-950 dark:text-white">Créer un nouveau cours</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCreatingCourse(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1.5 rounded-full bg-slate-100 dark:bg-slate-800 transition cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateCourse} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                    Titre du cours *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newCourseTitle}
+                    onChange={(e) => setNewCourseTitle(e.target.value)}
+                    placeholder="Ex: M1 Informatique - Intelligence Artificielle"
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                    Description
+                  </label>
+                  <textarea
+                    value={newCourseDesc}
+                    onChange={(e) => setNewCourseDesc(e.target.value)}
+                    placeholder="Description, objectifs pédagogiques, etc."
+                    rows={3}
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                    Dossier / Catégorie
+                  </label>
+                  <input
+                    type="text"
+                    value={newCourseCategory}
+                    onChange={(e) => setNewCourseCategory(e.target.value)}
+                    placeholder="Ex: Informatique, Management, Langues"
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div className="pt-2 flex space-x-3 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingCourse(false)}
+                    className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 transition cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition cursor-pointer"
+                  >
+                    Créer le cours
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

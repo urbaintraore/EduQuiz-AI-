@@ -982,15 +982,27 @@ app.get("/api/courses", (req, res) => {
 });
 
 app.post("/api/courses", (req, res) => {
-  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+  const { teacherId, title, description, category } = req.body;
+  const db = getDB();
+
+  let isAuthorized = false;
+  if (req.user && ["admin", "teacher"].includes(req.user.role)) {
+    isAuthorized = true;
+  } else if (teacherId) {
+    const dbUser = db.users.find(u => u.id === teacherId);
+    if (dbUser && ["admin", "teacher"].includes(dbUser.role)) {
+      isAuthorized = true;
+    }
+  }
+
+  if (!isAuthorized) {
     return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
   }
-  const { teacherId, title, description, category } = req.body;
+
   if (!teacherId || !title) {
     return res.status(400).json({ error: "Le titre et l'ID de l'enseignant sont requis." });
   }
 
-  const db = getDB();
   // Generate simple 6-char course code
   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -1010,15 +1022,27 @@ app.post("/api/courses", (req, res) => {
 });
 
 app.put("/api/courses/:id", (req, res) => {
-  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
-    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
-  }
   const { id } = req.params;
   const { title, description, category } = req.body;
   const db = getDB();
   const cIndex = db.courses.findIndex(c => c.id === id);
   if (cIndex === -1) {
     return res.status(404).json({ error: "Cours non trouvé." });
+  }
+
+  let isAuthorized = false;
+  if (req.user && ["admin", "teacher"].includes(req.user.role)) {
+    isAuthorized = true;
+  } else {
+    const course = db.courses[cIndex];
+    const dbUser = db.users.find(u => u.id === course.teacherId);
+    if (dbUser && ["admin", "teacher"].includes(dbUser.role)) {
+      isAuthorized = true;
+    }
+  }
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
   }
 
   db.courses[cIndex] = {
