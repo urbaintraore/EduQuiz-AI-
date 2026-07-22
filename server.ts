@@ -853,109 +853,127 @@ app.use("/api", (req: any, res, next) => {
 });
 
 app.post("/api/auth/register", (req, res) => {
-  const { email, password, role, university, schoolClass, firebaseUid } = req.body;
-  
-  if (!email || !role) {
-    return res.status(400).json({ error: "Champs obligatoires manquants." });
-  }
+  try {
+    const { email, password, role, university, schoolClass, firebaseUid } = req.body;
+    
+    if (!email || !role) {
+      return res.status(400).json({ error: "Champs obligatoires manquants." });
+    }
 
-  const db = getDB();
-  const existing = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  if (existing) {
-    // If already exists, just return the user and token successfully
-    const { password: _, ...userSafe } = existing;
-    const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.status(200).json({ user: userSafe, token });
-  }
+    const db = getDB();
+    db.users = db.users || [];
+    db.courses = db.courses || [];
+    db.enrollments = db.enrollments || [];
 
-  const newUser = {
-    id: firebaseUid || ("usr_" + Math.random().toString(36).substring(2, 11)),
-    email: email.toLowerCase(),
-    password: password || "",
-    role,
-    university: university || "Université d'études",
-    schoolClass: role === 'student' ? (schoolClass || "Promotion Générale") : ""
-  };
+    const existing = db.users.find(u => u && u.email && typeof u.email === "string" && u.email.toLowerCase() === email.toLowerCase());
+    if (existing) {
+      // If already exists, just return the user and token successfully
+      const { password: _, ...userSafe } = existing;
+      const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+      return res.status(200).json({ user: userSafe, token });
+    }
 
-  db.users.push(newUser);
-
-  if (role === 'student') {
-    db.courses.forEach(c => {
-      const already = db.enrollments.some(e => e.studentId === newUser.id && e.courseId === c.id);
-      if (!already) {
-        db.enrollments.push({
-          studentId: newUser.id,
-          courseId: c.id,
-          enrolledAt: new Date().toISOString()
-        });
-      }
-    });
-  }
-
-  saveDB(db);
-
-  // Return user omitting password
-  const { password: _, ...userSafe } = newUser;
-  const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
-  res.status(201).json({ user: userSafe, token });
-});
-
-app.post("/api/auth/login", (req, res) => {
-  const { email, password, firebaseUid, role } = req.body;
-  
-  if (!email) {
-    return res.status(400).json({ error: "Veuillez fournir l'email." });
-  }
-
-  const db = getDB();
-  let user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  
-  if (!user) {
-    console.log(`🆕 Auto-creating local profile for user on login: ${email}`);
-    const inferredRole = role || (email.includes("enseignant") || email.includes("prof") || email.includes("admin") ? "teacher" : "student");
-    user = {
+    const newUser = {
       id: firebaseUid || ("usr_" + Math.random().toString(36).substring(2, 11)),
       email: email.toLowerCase(),
       password: password || "",
-      role: inferredRole,
-      university: "Université d'études",
-      schoolClass: inferredRole === 'student' ? "Promotion Générale" : ""
+      role,
+      university: university || "Université d'études",
+      schoolClass: role === 'student' ? (schoolClass || "Promotion Générale") : ""
     };
-    db.users.push(user);
-    if (inferredRole === 'student') {
+
+    db.users.push(newUser);
+
+    if (role === 'student') {
       db.courses.forEach(c => {
-        const already = db.enrollments.some(e => e.studentId === user.id && e.courseId === c.id);
+        const already = db.enrollments.some(e => e && e.studentId === newUser.id && e.courseId === c.id);
         if (!already) {
           db.enrollments.push({
-            studentId: user.id,
+            studentId: newUser.id,
             courseId: c.id,
             enrolledAt: new Date().toISOString()
           });
         }
       });
     }
+
     saveDB(db);
-  } else {
-    if (email.includes("enseignant") || email.includes("prof") || email.includes("admin")) {
-      if (user.role !== 'teacher') {
-        user.role = 'teacher';
-        user.schoolClass = "";
-        saveDB(db);
-      }
-    } else if (role && user.role !== role) {
-      user.role = role;
-      if (role === 'student' && !user.schoolClass) {
-        user.schoolClass = "Promotion Générale";
-      } else if (role !== 'student') {
-        user.schoolClass = "";
+
+    // Return user omitting password
+    const { password: _, ...userSafe } = newUser;
+    const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.status(201).json({ user: userSafe, token });
+  } catch (err: any) {
+    console.error("❌ Exception in register endpoint:", err);
+    return res.status(500).json({ error: "Erreur serveur lors de l'inscription.", details: err.message || String(err) });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { email, password, firebaseUid, role } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: "Veuillez fournir l'email." });
+    }
+
+    const db = getDB();
+    db.users = db.users || [];
+    db.courses = db.courses || [];
+    db.enrollments = db.enrollments || [];
+
+    let user = db.users.find(u => u && u.email && typeof u.email === "string" && u.email.toLowerCase() === email.toLowerCase());
+    
+    if (!user) {
+      console.log(`🆕 Auto-creating local profile for user on login: ${email}`);
+      const inferredRole = role || (email.includes("enseignant") || email.includes("prof") || email.includes("admin") ? "teacher" : "student");
+      user = {
+        id: firebaseUid || ("usr_" + Math.random().toString(36).substring(2, 11)),
+        email: email.toLowerCase(),
+        password: password || "",
+        role: inferredRole,
+        university: "Université d'études",
+        schoolClass: inferredRole === 'student' ? "Promotion Générale" : ""
+      };
+      db.users.push(user);
+      if (inferredRole === 'student') {
+        db.courses.forEach(c => {
+          const already = db.enrollments.some(e => e && e.studentId === user!.id && e.courseId === c.id);
+          if (!already) {
+            db.enrollments.push({
+              studentId: user!.id,
+              courseId: c.id,
+              enrolledAt: new Date().toISOString()
+            });
+          }
+        });
       }
       saveDB(db);
+    } else {
+      if (email.includes("enseignant") || email.includes("prof") || email.includes("admin")) {
+        if (user.role !== 'teacher') {
+          user.role = 'teacher';
+          user.schoolClass = "";
+          saveDB(db);
+        }
+      } else if (role && user.role !== role) {
+        user.role = role;
+        if (role === 'student' && !user.schoolClass) {
+          user.schoolClass = "Promotion Générale";
+        } else if (role !== 'student') {
+          user.schoolClass = "";
+        }
+        saveDB(db);
+      }
     }
-  }
 
-  const { password: _, ...userSafe } = user;
-  const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
-  return res.json({ user: userSafe, token });
+    const { password: _, ...userSafe } = user;
+    const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ user: userSafe, token });
+  } catch (err: any) {
+    console.error("❌ Exception in login endpoint:", err);
+    return res.status(500).json({ error: "Erreur serveur lors de la connexion.", details: err.message || String(err) });
+  }
 });
 
 // --- API COURSES ENDPOINTS ---
