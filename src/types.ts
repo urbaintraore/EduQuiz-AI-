@@ -87,6 +87,7 @@ export interface Exam {
   password?: string;
   accessRestriction?: string;
   reviewOptions?: { showResults: boolean; immediateFeedback: boolean };
+  questions?: Question[];
 }
 
 export interface MonitoringConfig {

@@ -46,6 +46,8 @@ import {
   Link,
   ShieldAlert,
   TrendingUp,
+  Radio,
+  BarChart2,
   Brain
 } from "lucide-react";
 import Navbar from "./components/Navbar";
@@ -165,9 +167,174 @@ const safeConfirm = (msg: string): boolean => {
   }
 };
 
+function StudentExamsListView({ courses, onStartExam, studentSubmissions }: { courses: Course[], onStartExam: (exam: Exam) => void, studentSubmissions: any[] }) {
+  const [courseExamsMap, setCourseExamsMap] = useState<Record<string, Exam[]>>({});
+  const [loadingExams, setLoadingExams] = useState(true);
+
+  useEffect(() => {
+    async function loadExams() {
+      const map: Record<string, Exam[]> = {};
+      for (const c of courses) {
+        try {
+          const res = await fetch(`/api/courses/${c.id}/exams`);
+          if (res.ok) {
+            const data = await res.json();
+            map[c.id] = data;
+          } else {
+            map[c.id] = [];
+          }
+        } catch {
+          map[c.id] = [];
+        }
+      }
+      setCourseExamsMap(map);
+      setLoadingExams(false);
+    }
+    if (courses.length > 0) {
+      loadExams();
+    } else {
+      setLoadingExams(false);
+    }
+  }, [courses]);
+
+  if (loadingExams) {
+    return <p className="text-xs text-slate-400 py-4 text-center">Chargement des sessions d'examens...</p>;
+  }
+
+  const allExams = courses.flatMap(c => (courseExamsMap[c.id] || []).map(ex => ({ ...ex, courseTitle: c.title })));
+
+  if (allExams.length === 0) {
+    return (
+      <div className="text-center py-6 bg-slate-50 dark:bg-slate-900 rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
+        <p className="text-xs text-slate-500">Aucun examen n'est actuellement publié pour vos cours.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {allExams.map(ex => {
+        const isSubmitted = studentSubmissions.some(sub => sub.examId === ex.id);
+        return (
+          <div key={ex.id} className="p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] font-mono px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-md font-bold">{ex.courseTitle}</span>
+                <span className="text-[10px] text-slate-400">⏱️ {ex.duration || 30} min</span>
+              </div>
+              <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 mt-1">{ex.title}</h4>
+              <p className="text-xs text-slate-500 mt-0.5">{ex.subjectText ? ex.subjectText.substring(0, 80) + "..." : "Évaluation Moodle surveillée"}</p>
+            </div>
+            <div>
+              {isSubmitted ? (
+                <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold border border-emerald-200">
+                  ✓ Déjà Soumis
+                </span>
+              ) : (
+                <button
+                  onClick={() => onStartExam(ex)}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition cursor-pointer flex items-center space-x-1.5 shadow-xs"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>Commencer l'Examen</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ExamQuestionEditor({ exam, onUpdateExam, triggerToast }: { exam: Exam, onUpdateExam: (exam: Exam) => void, triggerToast: any }) {
+  return (
+    <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+      <div className="flex justify-between items-center">
+        <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100">Éditeur de Questions — {exam.title}</h4>
+        <button
+          onClick={() => {
+            const newQ = {
+              id: "q-" + Date.now(),
+              examId: exam.id,
+              type: "mcq" as const,
+              statement: "Nouvelle question d'évaluation",
+              options: ["Option A", "Option B", "Option C", "Option D"],
+              correctAnswer: "Option A",
+              points: 2,
+              explanation: "Explication de la réponse correcte."
+            };
+            const updated = {
+              ...exam,
+              questions: [...(exam.questions || []), newQ]
+            };
+            onUpdateExam(updated);
+            triggerToast("Question ajoutée avec succès.", "success");
+          }}
+          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          <span>Ajouter une question</span>
+        </button>
+      </div>
+      <div className="space-y-3">
+        {(!exam.questions || exam.questions.length === 0) ? (
+          <p className="text-xs text-slate-400 py-6 text-center">Aucune question configurée pour cet examen.</p>
+        ) : (
+          exam.questions.map((q, idx) => (
+            <div key={q.id} className="p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center">
+              <div>
+                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Question {idx + 1} ({q.points} pts)</span>
+                <p className="text-xs font-medium text-slate-800 dark:text-slate-200 mt-0.5">{q.statement}</p>
+              </div>
+              <button
+                onClick={() => {
+                  const updated = {
+                    ...exam,
+                    questions: exam.questions?.filter(item => item.id !== q.id)
+                  };
+                  onUpdateExam(updated);
+                  triggerToast("Question supprimée.", "info");
+                }}
+                className="text-slate-400 hover:text-rose-600 p-1.5 transition rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/30"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ExamMonitoringView({ exam, course, triggerToast }: { exam: Exam, course: Course | null, triggerToast: any }) {
+  return (
+    <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+      <div className="flex justify-between items-center">
+        <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center space-x-2">
+          <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
+          <span>Supervision en Direct — {exam.title}</span>
+        </h4>
+        <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 text-[10px] font-bold rounded-full border border-emerald-200/50">
+          Système Actif (Anti-triche Moodle)
+        </span>
+      </div>
+      <p className="text-xs text-slate-500">Aucun étudiant n'a encore démarré cette session d'examen en direct.</p>
+    </div>
+  );
+}
+
 export default function App() {
   // Authentication & Global context
   const [user, setUser] = useState<User | null>(null);
+
+  const [chatMessages, setChatMessages] = useState<{role: "user" | "assistant", content: string}[]>([
+    {
+      role: "assistant",
+      content: "Bonjour ! Je suis l'assistant académique EduQuiz AI. 🤖 Comment puis-je vous aider aujourd'hui à configurer vos cours, créer des examens, ou à structurer au mieux vos documents sources (PDF, TXT) pour obtenir d'excellentes questions automatiques d'IA ?"
+    }
+  ]);
 
   // Dark mode state with check for previous configurations
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -191,7 +358,7 @@ export default function App() {
   }, [darkMode]);
 
   const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
+    const newMode = !darkMode; setDarkMode(newMode); localStorage.setItem("theme", newMode ? "dark" : "light");
   };
 
   // Dynamic AI Chat initial state according to current user role
@@ -240,21 +407,40 @@ export default function App() {
   const [activeCourse, setActiveCourse] = useState<Course | null>(null);
   const [activeExam, setActiveExam] = useState<Exam | null>(null);
 
+  // Navigation History Stack for Back button
+  const [navHistory, setNavHistory] = useState<Array<{
+    activeTab: string;
+    activeCourse: Course | null;
+    activeExam: Exam | null;
+  }>>([]);
+
+  const pushHistory = () => {
+    setNavHistory(prev => [
+      ...prev,
+      { activeTab, activeCourse, activeExam }
+    ]);
+  };
+
+  const handleGoBack = () => {
+    if (navHistory.length === 0) return;
+    const last = navHistory[navHistory.length - 1];
+    setNavHistory(prev => prev.slice(0, prev.length - 1));
+    setActiveTab(last.activeTab);
+    setActiveCourse(last.activeCourse);
+    setActiveExam(last.activeExam);
+  };
+
+  useEffect(() => {
+    if (user && user.role !== "teacher" && activeTab === "moodle_editor") {
+      setActiveTab("courses");
+    }
+  }, [user, activeTab]);
   // Lists & Resource States
   const [courses, setCourses] = useState<Course[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [submissions, setSubmissions] = useState<any[]>([]);
 
-  // Computed filtered list of questions based on keyword search & difficulty quick toggle
-  const filteredQuestions = questions.filter((q) => {
-    if (showOnlyHardQuestions && q.difficulty !== "Hard") return false;
-    if (!questionSearchQuery.trim()) return true;
-    return q.statement.toLowerCase().includes(questionSearchQuery.toLowerCase());
-  });
-  const [teacherSelectedSub, setTeacherSelectedSub] = useState<any | null>(null);
-
-  // Forms states
   const [newCourseTitle, setNewCourseTitle] = useState("");
   const [newCourseDesc, setNewCourseDesc] = useState("");
   const [newCourseCategory, setNewCourseCategory] = useState("");
@@ -263,17 +449,9 @@ export default function App() {
   const [editingCategoryValue, setEditingCategoryValue] = useState("");
   const [isCreatingCourse, setIsCreatingCourse] = useState(false);
 
-  // Professional PDF/Print Export
+  const [teacherSelectedSub, setTeacherSelectedSub] = useState<any | null>(null);
   const [printSubmission, setPrintSubmission] = useState<any | null>(null);
-
-  // Floating AI Chat Widget
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{role: "user" | "assistant", content: string}[]>([
-    {
-      role: "assistant",
-      content: "Bonjour ! Je suis l'assistant académique EduQuiz AI. 🤖 Comment puis-je vous aider aujourd'hui à configurer vos cours, créer des examens, ou à structurer au mieux vos documents sources (PDF, TXT) pour obtenir d'excellentes questions automatiques d'IA ?"
-    }
-  ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
 
@@ -293,11 +471,7 @@ export default function App() {
     detectAbnormalNoise: false, detectConversation: false, thresholdTabChanges: 3, thresholdFullscreenExits: 2,
     thresholdNoFaceTime: 30, alertScoreThreshold: 50
   });
-
-  // Joining course code Input for student
   const [joinCode, setJoinCode] = useState("");
-
-  // Question Manual Adder form
   const [isAddingQuestion, setIsAddingQuestion] = useState(false);
   const [newQType, setNewQType] = useState<QuestionType>("mcq");
   const [newQStatement, setNewQStatement] = useState("");
@@ -307,6 +481,7 @@ export default function App() {
   const [newQPoints, setNewQPoints] = useState("2");
   const [newQExplanation, setNewQExplanation] = useState("");
   const [newQDifficulty, setNewQDifficulty] = useState<"Easy" | "Medium" | "Hard">("Medium");
+
   const [questionSearchQuery, setQuestionSearchQuery] = useState("");
 
   // Share Exam modal details
@@ -320,6 +495,13 @@ export default function App() {
   // Keyboard shortcuts cheat sheet modal & Only Hard Questions quick toggle
   const [showShortcutsCheatSheet, setShowShortcutsCheatSheet] = useState(false);
   const [showOnlyHardQuestions, setShowOnlyHardQuestions] = useState(false);
+
+  // Computed filtered list of questions based on keyword search & difficulty quick toggle
+  const filteredQuestions = questions.filter((q) => {
+    if (showOnlyHardQuestions && q.difficulty !== "Hard") return false;
+    if (!questionSearchQuery.trim()) return true;
+    return q.statement.toLowerCase().includes(questionSearchQuery.toLowerCase());
+  });
 
   // Interactive Question editing row IDs
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
@@ -1218,10 +1400,36 @@ export default function App() {
         setIsCreatingExam(false);
         // auto open generated exam details
         setActiveExam(data);
+
+        const subjText = examSubject;
         setExamTitle("");
         setExamSubject("");
         setExamSolution("");
-        triggerToast("Examen configuré ! Vous pouvez maintenant générer le quiz.", "success");
+
+        if (subjText.trim()) {
+          triggerToast("Examen configuré ! Génération automatique du Quiz par l'IA en cours...", "info");
+          try {
+            const genRes = await fetch(`/api/exams/${data.id}/generate`, {
+              method: "POST"
+            });
+            const genData = await genRes.json();
+            if (genRes.ok) {
+              setQuestions(genData.questions || []);
+              triggerToast(genData.message || "Quiz généré avec succès !", "success");
+              const checkExam = await fetch(`/api/exams/${data.id}`);
+              if (checkExam.ok) {
+                const freshEx = await checkExam.json();
+                setActiveExam(freshEx);
+              }
+            } else {
+              triggerToast(genData.error || "Échec de la génération automatique du quiz.", "error");
+            }
+          } catch (e) {
+            triggerToast("Erreur de connexion lors de la génération automatique.", "error");
+          }
+        } else {
+          triggerToast("Examen configuré ! Vous pouvez maintenant générer le quiz.", "success");
+        }
       } else {
         triggerToast("Erreur lors de la configuration de l'examen.", "error");
       }
@@ -1230,7 +1438,7 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string>>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string>>, extractionType: "subject" | "solution" = "subject") => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -1245,6 +1453,7 @@ export default function App() {
       triggerToast("Extraction du contenu en cours...", "info");
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("type", extractionType);
 
       try {
         const res = await fetch("/api/extract-text", {
@@ -1641,6 +1850,49 @@ export default function App() {
     }
   };
 
+  const renderTeacherAnalytics = () => {
+    if (!activeExam) return null;
+    const examSubmissions = submissions.filter(s => s.examId === activeExam.id);
+    const gradedSubmissions = examSubmissions.filter(s => s.score !== null);
+    const examQuestions = questions.filter(q => q.type !== 'description');
+    const totalPoints = examQuestions.reduce((sum, q) => sum + (q.points || 1), 0);
+    const normalizedScores = gradedSubmissions.map(s => (s.score / (totalPoints || 1)) * 20);
+    const classAverage = normalizedScores.length > 0 ? parseFloat((normalizedScores.reduce((sum, score) => sum + score, 0) / normalizedScores.length).toFixed(1)) : 0;
+    const maxScore = normalizedScores.length > 0 ? parseFloat(Math.max(...normalizedScores).toFixed(1)) : 0;
+    const minScore = normalizedScores.length > 0 ? parseFloat(Math.min(...normalizedScores).toFixed(1)) : 0;
+    const passRate = normalizedScores.length > 0 ? parseFloat(((normalizedScores.filter(s => s >= 10).length / normalizedScores.length) * 100).toFixed(1)) : 0;
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
+            <span className="text-xs text-slate-400 font-semibold uppercase">Moyenne de classe</span>
+            <div className="text-2xl font-extrabold text-indigo-600 mt-1">{classAverage} <span className="text-sm font-normal text-slate-400">/ 20</span></div>
+          </div>
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
+            <span className="text-xs text-slate-400 font-semibold uppercase">Note maximale</span>
+            <div className="text-2xl font-extrabold text-emerald-600 mt-1">{maxScore} <span className="text-sm font-normal text-slate-400">/ 20</span></div>
+          </div>
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
+            <span className="text-xs text-slate-400 font-semibold uppercase">Note minimale</span>
+            <div className="text-2xl font-extrabold text-rose-600 mt-1">{minScore} <span className="text-sm font-normal text-slate-400">/ 20</span></div>
+          </div>
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
+            <span className="text-xs text-slate-400 font-semibold uppercase">Taux de réussite</span>
+            <div className="text-2xl font-extrabold text-indigo-600 mt-1">{passRate}%</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (!user) {
+    return <AuthPage onSuccess={handleAuthSuccess} />;
+  }
+
+  if (user.role === "admin") {
+    return <AdminDashboard user={user} onLogout={handleLogout} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col font-sans transition-all">
       <div className="print:hidden pb-[1px]">
@@ -1648,11 +1900,29 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={(tab) => {
+            pushHistory();
+            setActiveTab(tab);
+          }}
           darkMode={darkMode}
           onToggleDarkMode={toggleDarkMode}
         />
       </div>
+
+      {/* Navigation History Back Button Banner */}
+      {navHistory.length > 0 && user && (
+        <div className="max-w-7xl w-full mx-auto px-4 pt-4 print:hidden">
+          <button
+            type="button"
+            onClick={handleGoBack}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold shadow-xs hover:bg-slate-50 dark:hover:bg-slate-850 transition cursor-pointer"
+            title="Revenir à l'écran précédent"
+          >
+            <ChevronLeft className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span>Précédent ({navHistory.length})</span>
+          </button>
+        </div>
+        )}
       
       {/* Toast Alert bar */}
       {toast && (
@@ -1660,13 +1930,8 @@ export default function App() {
       )}
 
       {/* Auth Screen fallback if no active session */}
-      {!user ? (
-        <AuthPage onSuccess={handleAuthSuccess} />
-      ) : user.role === 'admin' ? (
-        <AdminDashboard user={user} onLogout={handleLogout} />
-      ) : (
-        <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 print:hidden">
-          
+      <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 print:hidden">
+          <div className="flex-1 flex flex-col space-y-6">
           {/* ========================================================
               STUDENT ACTIVE ISOLATED FULLSCALE EXAM TAKING VIEW 
              ======================================================== */}
@@ -1696,7 +1961,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              )}
+               )}
               {/* Header with Progress Bar */}
               <div className="bg-slate-900 text-white p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative">
                 <div>
@@ -1781,13 +2046,13 @@ export default function App() {
                   
                   {/* Warning banner inside the active quiz panel if tab focused out */}
                   {focusLossCount > 0 && (
-                    <div className="bg-rose-50 border border-rose-250 rounded-xl p-4 flex items-start space-x-3 text-rose-900 text-xs animate-fade-in mb-6">
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start space-x-3 text-rose-900 text-xs animate-fade-in mb-6">
                       <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-extrabold uppercase tracking-wider text-rose-955">⚠️ Signalement : Activité suspecte détectée</span>
+                        <span className="font-extrabold uppercase tracking-wider text-rose-900">⚠️ Signalement : Activité suspecte détectée</span>
                         <p className="mt-1 leading-relaxed text-rose-800">
-                          La fenêtre d'évaluation a perdu le focus ou un changement d'onglet est survenu <strong>{focusLossCount} fois</strong>. 
-                          Pour préserver l'équité intellectuelle des résultats d'examens, ces déviations sont enregistrées de façon permanente dans le rapport de correction. 
+                          La fenêtre d'évaluation a perdu le focus ou un changement d'onglet est survenu <strong>{focusLossCount} fois</strong>.
+                          Pour préserver l'équité intellectuelle des résultats d'examens, ces déviations sont enregistrées de façon permanente dans le rapport de correction.
                           Veuillez rester sur l'onglet d'évaluation pour éviter toute pénalité.
                         </p>
                       </div>
@@ -1866,7 +2131,7 @@ export default function App() {
                                         </label>
                                       ))}
                                     </div>
-                                  )}
+                                 )}
 
                                   {/* True or False */}
                                   {q.type === "true_false" && (
@@ -1958,7 +2223,7 @@ export default function App() {
                                         {/* Parse curly brackets inline choice */}
                                         {q.statement.includes("{") ? (
                                           <span>
-                                            {q.statement.split(/({[^}]+})/g).map((chunk, cidx) => {
+                                            {q.statement.split(new RegExp("({[^}]+})", "g")).map((chunk, cidx) => {
                                               if (chunk.startsWith("{") && chunk.endsWith("}")) {
                                                 // Extract internal options list
                                                 const optsInside = chunk.slice(1, -1).split("|");
@@ -2096,7 +2361,7 @@ export default function App() {
                               isActive
                                 ? "bg-indigo-50 border-indigo-400 text-indigo-900 ring-2 ring-indigo-200 font-extrabold"
                                 : answered
-                                  ? "bg-emerald-50 border-emerald-250 text-emerald-800 hover:bg-emerald-100/85"
+                                  ? "bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100/85"
                                   : "bg-white border-slate-200 text-slate-500 hover:bg-slate-100"
                             }`}
                           >
@@ -2157,7 +2422,6 @@ export default function App() {
               </div>
             </div>
           )}
-
           {/* ========================================================
               QUIZ SUBMISSION CONFIRMATION MODAL
              ======================================================== */}
@@ -2244,7 +2508,7 @@ export default function App() {
                                 setSlideDirection(idx > currentQuestionIndex ? 1 : -1);
                                 setCurrentQuestionIndex(idx);
                               }}
-                              className="bg-white hover:bg-rose-100 border border-rose-250 text-rose-800 text-[10px] font-mono font-bold py-1 px-2.5 rounded-lg transition shrink-0 cursor-pointer"
+                              className="bg-white hover:bg-rose-100 border border-rose-200 text-rose-800 text-[10px] font-mono font-bold py-1 px-2.5 rounded-lg transition shrink-0 cursor-pointer"
                               title={`Aller à la question ${idx + 1}`}
                             >
                               Q{idx + 1}
@@ -2585,7 +2849,7 @@ export default function App() {
                                   )}
 
                                   {q.type === "essay" && selectedSubReport.essayFeedbacks?.[q.id] && (
-                                    <div className="bg-indigo-50/50 dark:bg-indigo-950/20 p-2.5 rounded-lg border border-indigo-100 dark:border-indigo-900/40 text-indigo-950 dark:text-indigo-250 mt-1">
+                                    <div className="bg-indigo-50/50 dark:bg-indigo-950/20 p-2.5 rounded-lg border border-indigo-100 dark:border-indigo-900/40 text-indigo-950 dark:text-indigo-200 mt-1">
                                       <div className="flex items-center justify-between mb-1">
                                         <p className="font-bold text-[10px] uppercase tracking-wider text-indigo-800 dark:text-indigo-300">Commentaire correcteur :</p>
                                         {selectedSubReport.essayFeedbacks?.[q.id]?.similarityPct !== undefined && (
@@ -2692,7 +2956,13 @@ export default function App() {
               </div>
 
               {studentTab === 'activities' && (
-                <>
+                  <motion.div
+                    key="student-activities"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.25 }}
+                  >
                   {/* Enrolled Courses & Exams Lists */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     
@@ -2826,11 +3096,18 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </>
-              )}
+                  </motion.div>
+                )}
 
-              {studentTab === 'analytics' && (
-                <div className="space-y-8 animate-fade-in">
+                {studentTab === 'analytics' && (
+                  <motion.div
+                    key="student-analytics"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.25 }}
+                    className="space-y-8"
+                  >
                   {loadingStudentAnalytics ? (
                     <div className="py-20 flex flex-col items-center justify-center text-center space-y-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-150 dark:border-slate-800 shadow-2xs">
                       <div className="relative">
@@ -2976,8 +3253,8 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                </div>
-              )}
+                  </motion.div>
+                )}
 
             </div>
           )}
@@ -2986,7 +3263,7 @@ export default function App() {
               TEACHER WORKSPACE: ACTIVE COURSES & GENERATORS 
              ======================================================== */}
           {user.role === "teacher" && activeTab === "moodle_editor" && (
-            <div className="space-y-8 animate-fade-in">
+            <div className="space-y-8">
               <MoodleEditor
                 courses={courses}
                 exams={exams}
@@ -2999,2211 +3276,280 @@ export default function App() {
             </div>
           )}
 
-          {user.role === "teacher" && activeTab !== "moodle_editor" && (
-            <div className="space-y-8 animate-fade-in">
-              
-              {/* Back to Courses List Navigation if active */}
-              {activeCourse && (
-                <div className="flex items-center space-x-2 text-xs text-slate-500 mb-2">
-                  <button onClick={() => setActiveCourse(null)} className="hover:text-indigo-600 font-medium">
-                    Mes Cours
-                  </button>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                  <span className="text-slate-900 font-semibold">{activeCourse.title}</span>
-                  {activeExam && (
-                    <>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                      <span className="text-slate-900 font-semibold">{activeExam.title}</span>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* LIST OF COURSES IF NONE SELECTED */}
-              {!activeCourse && (
-                <div className="space-y-8">
-                  {/* Visual 4-Modules Pedagogical Center */}
-                  <div className="bg-slate-50 dark:bg-slate-800/40 rounded-3xl p-6 border border-slate-200/60 dark:border-slate-800/80 space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-slate-800 pb-3">
-                      <div>
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-100 dark:border-indigo-900/40">
-                          Espace Pédagogique Actif
-                        </span>
-                        <h3 className="text-sm font-bold text-slate-850 dark:text-slate-100 mt-1">
-                          Vos 04 Nouveaux Modules Intégrés EduQuiz AI
-                        </h3>
-                      </div>
-                      <span className="text-xs text-slate-400 font-mono">Status: Opérationnel ⚡</span>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                      {/* Module 1: Générateur IA */}
-                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
-                        <div className="space-y-2">
-                          <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                            <Sparkles className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">1. Générateur d'Examens IA</h4>
-                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
-                              Génération instantanée de quiz complexes (Moodle Quiz) basés sur vos sujets, corrigés et barèmes pédagogiques.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-                          {courses.length === 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsCreatingCourse(true);
-                                triggerToast("Créez d'abord un cours pour y attacher vos examens générés par l'IA.", "info");
-                              }}
-                              className="w-full text-center bg-indigo-55/15 hover:bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 py-1 rounded text-[10px] font-bold transition cursor-pointer"
-                            >
-                              + Créer un cours d'abord
-                            </button>
-                          ) : (
-                            <div className="space-y-1">
-                              <label className="block text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase">Lancer pour la classe :</label>
-                              <select
-                                onChange={(e) => {
-                                  const cId = e.target.value;
-                                  if (!cId) return;
-                                  const selected = courses.find(c => c.id === cId);
-                                  if (selected) {
-                                    selectCourse(selected);
-                                    setIsCreatingExam(true);
-                                    triggerToast(`Générateur IA ouvert pour le cours : ${selected.title}`, "success");
-                                  }
-                                }}
-                                className="w-full text-[10px] p-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-hidden"
-                                defaultValue=""
-                              >
-                                <option value="" disabled>-- Choisir un cours --</option>
-                                {courses.map(c => (
-                                  <option key={c.id} value={c.id}>{c.title}</option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Module 2: Éditeur Scientifique & Cloze */}
-                      <button
-                        onClick={() => setActiveTab("moodle_editor")}
-                        className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between text-left shadow-xs hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-900 transition cursor-pointer"
-                      >
-                        <div className="space-y-2">
-                          <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                            <Edit3 className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-1.5">
-                              <span>2. Éditeur de Questions Scientifique & Cloze Intégré</span>
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                            </h4>
-                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
-                              Saisie simplifiée de formules complexes LaTeX ($$\int f(x) dx$$) et assistant de syntaxe Cloze (Texte à trous) Moodle.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 w-full flex justify-between items-center text-[10px]">
-                          <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">Accéder à l'éditeur</span>
-                          <span className="text-indigo-600 dark:text-indigo-400 font-bold">Ouvrir l'onglet →</span>
-                        </div>
-                      </button>
-
-                      {/* Module 3: Surveillance E-Proctoring */}
-                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
-                        <div className="space-y-2">
-                          <div className="w-8 h-8 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center">
-                            <ShieldAlert className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">3. Surveillance E-Proctoring</h4>
-                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
-                              Proctoring en temps réel : webcam, sons anormaux, blocage du copier-coller et avertissements intelligents.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-[10px]">
-                          <span className="text-slate-400 font-mono">Module 3</span>
-                          <span className="text-rose-600 dark:text-rose-400 font-bold">Intégré par défaut dans l'examen</span>
-                        </div>
-                      </div>
-
-                      {/* Module 4: Analyses & Statistiques */}
-                      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-150 dark:border-slate-850 flex flex-col justify-between shadow-xs hover:shadow-md transition">
-                        <div className="space-y-2">
-                          <div className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center">
-                            <TrendingUp className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">4. Analyses & Export de Notes</h4>
-                            <p className="text-[11px] text-slate-450 dark:text-slate-500 mt-1 leading-relaxed">
-                              Analyse de réussite par classe, export des notes compatible Excel/Moodle, et courbes de progression.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-[10px]">
-                          <span className="text-slate-400 font-mono">Module 4</span>
-                          <span className="text-amber-650 dark:text-amber-400 font-bold">Disponible par examen</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <h2 className="text-xl font-sans font-bold text-slate-900 dark:text-white tracking-tight">Mes Salles de Classes & Cours</h2>
-                      <p className="text-xs text-slate-500 dark:text-slate-450">Gérez vos supports d'enseignement et générez des Quiz Moodle</p>
-                    </div>
-
-                    <button
-                      id="btn-create-course"
-                      onClick={() => setIsCreatingCourse(true)}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs hover:shadow-md transition duration-150 flex items-center space-x-1"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Nouveau Cours</span>
-                    </button>
-                  </div>
-
-                  {/* Toggle Create Course Form inline */}
-                  {isCreatingCourse && (
-                    <form onSubmit={handleCreateCourse} className="bg-white rounded-2xl p-6 border border-indigo-100 shadow-md space-y-4 max-w-2xl">
-                      <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                        <h3 className="font-bold text-sm text-slate-900">Configurer une nouvelle matière active</h3>
-                        <button type="button" onClick={() => setIsCreatingCourse(false)} className="text-slate-400 hover:text-slate-700">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-4">
-                        <div>
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                            Intitulé du Cours <span className="text-rose-600 font-bold">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="ex. Mathématiques Discrètes & Graphes"
-                            value={newCourseTitle}
-                            onChange={(e) => setNewCourseTitle(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                            Description du programme d'étude (optionnel)
-                          </label>
-                          <textarea
-                            rows={3}
-                            placeholder="Décrivez brièvement les thèmes ou niveaux ciblés..."
-                            value={newCourseDesc}
-                            onChange={(e) => setNewCourseDesc(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-1 focus:ring-indigo-500 bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                            Dossier / Catégorie de classement (optionnel)
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="ex. Mathématiques, Informatique, Semestre 1..."
-                            value={newCourseCategory}
-                            onChange={(e) => setNewCourseCategory(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-1 focus:ring-indigo-500 bg-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-2 flex justify-end space-x-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsCreatingCourse(false)}
-                          className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-50"
-                        >
-                          Annuler
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold"
-                        >
-                          Créer le cours
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
+                    {user.role === "teacher" && activeTab !== "moodle_editor" && (
+            <div className="space-y-8">
+              {!activeCourse ? (
+                <div className="bg-white rounded-2xl border border-slate-100 p-6">
+                  <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                    <BookOpen className="w-5 h-5 text-indigo-600" />
+                    <span>Mes Cours Gérés</span>
+                  </h3>
                   {courses.length === 0 ? (
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 p-12 text-center">
-                      <BookOpen className="w-16 h-16 stroke-1 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
-                      <h3 className="text-slate-900 dark:text-white font-bold text-sm">Prêt à démarrer l'évaluation de vos étudiants ?</h3>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 max-w-sm mx-auto">
-                        Créez votre première salle de cours ci-dessous afin de générer automatiquement des examens Moodle qualitatifs grâce à l'IA.
-                      </p>
+                    <div className="text-center py-12 text-slate-400">
+                      <BookOpen className="w-12 h-12 mx-auto stroke-1 mb-2 text-slate-300" />
+                      <p className="text-xs">Aucun cours créé. Utilisez l editeur Moodle pour créer votre premier cours.</p>
                     </div>
                   ) : (
-                    (() => {
-                      const categoriesList = Array.from(
-                        new Set(
-                          courses
-                            .map((c) => c.category?.trim())
-                            .filter((cat) => cat && cat !== "")
-                        )
-                      );
-
-                      const filteredCourses = courses.filter((c) => {
-                        if (selectedCategoryFilter === "all") return true;
-                        if (selectedCategoryFilter === "uncategorized") return !c.category || c.category.trim() === "";
-                        return c.category && c.category.toLowerCase().trim() === selectedCategoryFilter.toLowerCase().trim();
-                      });
-
-                      return (
-                        <div className="flex flex-col lg:flex-row gap-6">
-                          {/* Sidebar Folder Explorer */}
-                          <div className="lg:w-64 shrink-0 bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 p-4 rounded-2xl h-fit space-y-4">
-                            <h4 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest flex items-center space-x-1.5 mb-2 font-mono">
-                              <FolderOpen className="w-3.5 h-3.5 text-indigo-500" />
-                              <span>Dossiers de cours</span>
-                            </h4>
-                            <div className="space-y-1">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedCategoryFilter("all")}
-                                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex justify-between items-center transition cursor-pointer outline-hidden ${
-                                  selectedCategoryFilter === "all"
-                                    ? "bg-indigo-55/10 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-100/50 dark:border-indigo-900/50"
-                                    : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/55 border border-transparent"
-                                }`}
-                              >
-                                <span>Tous les cours</span>
-                                <span className="font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded text-[10px] font-bold">
-                                  {courses.length}
-                                </span>
-                              </button>
-
-                              {categoriesList.map((cat: any) => {
-                                const count = courses.filter((c) => c.category?.trim() === cat).length;
-                                return (
-                                  <button
-                                    key={cat}
-                                    type="button"
-                                    onClick={() => setSelectedCategoryFilter(cat)}
-                                    className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex justify-between items-center transition cursor-pointer outline-hidden ${
-                                      selectedCategoryFilter === cat
-                                        ? "bg-indigo-55/10 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-100/50 dark:border-indigo-900/50"
-                                        : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/55 border border-transparent"
-                                    }`}
-                                  >
-                                    <span className="truncate flex items-center space-x-1">
-                                      <span>📁</span>
-                                      <span className="truncate">{cat}</span>
-                                    </span>
-                                    <span className="font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded text-[10px] font-bold font-sans">
-                                      {count}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-
-                              {courses.some((c) => !c.category || c.category.trim() === "") && (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedCategoryFilter("uncategorized")}
-                                  className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex justify-between items-center transition cursor-pointer outline-hidden ${
-                                    selectedCategoryFilter === "uncategorized"
-                                      ? "bg-indigo-55/10 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-100/50 dark:border-indigo-900/50"
-                                      : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/55 border border-transparent"
-                                  }`}
-                                >
-                                  <span>Sans dossier</span>
-                                  <span className="font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded text-[10px] font-bold">
-                                    {courses.filter((c) => !c.category || c.category.trim() === "").length}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Grid layout panel */}
-                          <div className="flex-1">
-                            {filteredCourses.length === 0 ? (
-                              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100/80 dark:border-slate-800 p-12 text-center space-y-2">
-                                <FolderClosed className="w-12 h-12 stroke-1 text-slate-300 dark:text-slate-705 mx-auto" />
-                                <p className="text-xs text-slate-500 dark:text-slate-450 font-medium">Aucun cours trouvé dans cette catégorie.</p>
-                              </div>
-                            ) : (
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {filteredCourses.map((course) => (
-                                  <div
-                                    key={course.id}
-                                    onClick={() => selectCourse(course)}
-                                    className="bg-white dark:bg-slate-900/50 rounded-3xl border border-slate-100 dark:border-slate-800 p-5 hover:shadow-md hover:border-indigo-100 dark:hover:border-indigo-900 cursor-pointer transition flex flex-col justify-between group h-48 relative"
-                                  >
-                                    <div>
-                                      <div className="flex justify-between items-start mb-2">
-                                        <span className="text-[10px] uppercase font-mono tracking-wider font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded border border-indigo-100 dark:border-indigo-900">
-                                          Clé: {course.code}
-                                        </span>
-                                        <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setEditingCourseForCategory(course);
-                                              setEditingCategoryValue(course.category || "");
-                                            }}
-                                            className="p-1 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
-                                            title="Modifier la catégorie / dossier"
-                                          >
-                                            <Edit3 className="w-3.5 h-3.5" />
-                                          </button>
-                                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-600 transition-all transform group-hover:translate-x-1" />
-                                        </div>
-                                      </div>
-
-                                      <h3 className="font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-all text-sm mb-1 line-clamp-1">{course.title}</h3>
-                                      <p className="text-xs text-slate-400 dark:text-slate-500 line-clamp-2">{course.description || "Aucune description fournie."}</p>
-                                    </div>
-
-                                    {/* Categorization display inline/modification */}
-                                    <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
-                                      {editingCourseForCategory?.id === course.id ? (
-                                        <div 
-                                          className="flex items-center space-x-1.5 w-full" 
-                                          onClick={(e) => e.stopPropagation()}
-                                        >
-                                          <input
-                                            type="text"
-                                            placeholder="ex. Mathématiques, L1..."
-                                            value={editingCategoryValue}
-                                            onChange={(e) => setEditingCategoryValue(e.target.value)}
-                                            className="px-2 py-1 border border-slate-200 dark:border-slate-705 rounded-md text-[11px] text-slate-800 dark:text-white bg-white dark:bg-slate-800 focus:outline-hidden w-full font-sans font-medium"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => handleUpdateCourseCategory(course.id, editingCategoryValue)}
-                                            className="px-2 py-1 bg-indigo-600 text-white rounded-md text-[11px] font-bold hover:bg-indigo-700 shrink-0 cursor-pointer"
-                                          >
-                                            Ok
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setEditingCourseForCategory(null)}
-                                            className="px-2 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 rounded-md text-[11px] font-bold shrink-0 cursor-pointer"
-                                          >
-                                            X
-                                          </button>
-                                        </div>
-                                      ) : (
-                                        <>
-                                          <span className="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500 uppercase">
-                                            EDUGEN CLASSROOM
-                                          </span>
-                                          {course.category ? (
-                                            <span className="text-[10px] bg-indigo-50/75 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold px-2 py-0.5 rounded-xl border border-indigo-100/30 dark:border-indigo-900/40 flex items-center space-x-1">
-                                              <span>📁</span>
-                                              <span className="max-w-[80px] truncate">{course.category}</span>
-                                            </span>
-                                          ) : (
-                                            <span className="text-[10px] text-slate-300 dark:text-slate-600 italic">
-                                              Sans dossier
-                                            </span>
-                                          )}
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()
-                  )}
-
-                </div>
-              )}
-
-              {/* LIST OF EXAMS WITHIN ACTIVE COURSE */}
-              {activeCourse && !activeExam && (
-                <div className="space-y-6">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                    <div>
-                      <span className="text-xs font-mono font-bold text-indigo-600 uppercase">Matière Active : {activeCourse.title}</span>
-                      <h2 className="text-xl font-sans font-extrabold tracking-tight text-slate-900 mt-1">Examens & Quiz Générés</h2>
-                    </div>
-
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={handleExportGradesCSV}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs transition flex items-center space-x-1 cursor-pointer"
-                        title="Télécharger l'intégralité des notes au format CSV"
-                      >
-                        <FileSpreadsheet className="w-4 h-4" />
-                        <span>Exporter Notes (CSV)</span>
-                      </button>
-
-                      <button
-                        onClick={() => setActiveCourse(null)}
-                        className="px-4 py-2 border border-slate-200 text-slate-500 hover:bg-slate-100 rounded-xl text-xs font-semibold transition cursor-pointer"
-                      >
-                        Changer de cours
-                      </button>
-
-                      <button
-                        onClick={() => setIsCreatingExam(true)}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        <span>Générateur d'Examens IA & Moodle</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Create Exam Form Modal Wrapper */}
-                  {isCreatingExam && (
-                    <form onSubmit={handleCreateExam} className="bg-white rounded-2xl p-6 border border-indigo-100 shadow-md space-y-4 max-w-3xl animate-fade-in">
-                      <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                        <div>
-                          <h3 className="font-bold text-sm text-slate-900 flex items-center">
-                            <Sparkles className="w-4 h-4 text-indigo-600 mr-1.5" />
-                            <span>Générateur d'Examens IA & Moodle Quiz</span>
-                          </h3>
-                          <p className="text-xs text-slate-400">L'IA convertira votre document en questions à choix multiples, appariements, etc.</p>
-                        </div>
-                        <button type="button" onClick={() => setIsCreatingExam(false)} className="text-slate-400 hover:text-slate-700">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-                            Titre de l'évaluation <span className="text-rose-600 font-bold">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="ex. CC1 - Algèbres Linéaires"
-                            value={examTitle}
-                            onChange={(e) => setExamTitle(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-                            Durée de composition (Minutes) <span className="text-rose-600 font-bold">*</span>
-                          </label>
-                          <input
-                            type="number"
-                            required
-                            min="5"
-                            placeholder="ex. 60"
-                            value={examDuration}
-                            onChange={(e) => setExamDuration(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-                            Date et Heure officielle de début
-                          </label>
-                          <input
-                            type="datetime-local"
-                            value={examStartDate}
-                            onChange={(e) => setExamStartDate(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm text-slate-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-                            Barème Global ciblé
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="ex. Sur 20 points : QCM (10pt), Rédaction (10pt)"
-                            value={examGradingScale}
-                            onChange={(e) => setExamGradingScale(e.target.value)}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Documents Upload/Saisie area */}
-                      <div className="space-y-4 pt-2">
-                        <div>
-                          <div className="flex items-center justify-between mb-1 pb-1">
-                            <label className="block text-xs font-bold text-slate-600 uppercase">
-                              Sujet original examen (Texte ou Éléments majeurs à évaluer)
-                            </label>
-                          </div>
-                          <input
-                            ref={subjectFileRef}
-                            type="file"
-                            accept=".txt,.md,.csv,.pdf,.docx,image/*"
-                            className="hidden"
-                            onChange={(e) => handleFileUpload(e, setExamSubject)}
-                          />
-                          <ScientificRichEditor
-                            value={examSubject}
-                            onChange={(val) => setExamSubject(val)}
-                            placeholder="Saisissez ou collez-ici le sujet ou contenu sur lequel porteront les questions..."
-                            rows={4}
-                            hasUpload={true}
-                            onUploadClick={() => subjectFileRef.current?.click()}
-                          />
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between mb-1 pb-1">
-                            <label className="block text-xs font-bold text-slate-600 uppercase">
-                              Corrigé type (Données de réponses d'IA ou de référence)
-                            </label>
-                          </div>
-                          <input
-                            ref={solutionFileRef}
-                            type="file"
-                            accept=".txt,.md,.csv,.pdf,.docx,image/*"
-                            className="hidden"
-                            onChange={(e) => handleFileUpload(e, setExamSolution)}
-                          />
-                          <ScientificRichEditor
-                            value={examSolution}
-                            onChange={(val) => setExamSolution(val)}
-                            placeholder="Saisissez les réponses attendues pour aider l'IA à attribuer des explications adaptées Moodle..."
-                            rows={3}
-                            hasUpload={true}
-                            onUploadClick={() => solutionFileRef.current?.click()}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                        <div className="flex items-center space-x-2 mb-3">
-                          <input
-                            type="checkbox"
-                            id="proctoring-active"
-                            checked={examMonitoringConfig.active}
-                            onChange={(e) => setExamMonitoringConfig({ ...examMonitoringConfig, active: e.target.checked })}
-                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                          />
-                          <label htmlFor="proctoring-active" className="text-sm font-bold text-slate-800 dark:text-slate-200 cursor-pointer">
-                            Activer l'E-Proctoring (Surveillance stricte)
-                          </label>
-                        </div>
-                        {examMonitoringConfig.active && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700 mt-2 text-left">
-                            <div className="space-y-2">
-                              <h4 className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 pb-1 mb-2">Écran & Navigateur</h4>
-                              <label className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300">
-                                <input type="checkbox" checked={examMonitoringConfig.requireScreenShare} onChange={(e) => setExamMonitoringConfig({...examMonitoringConfig, requireScreenShare: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5" />
-                                <span>Partage d'écran obligatoire</span>
-                              </label>
-                              <label className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300">
-                                <input type="checkbox" checked={examMonitoringConfig.monitorWindowBlur} onChange={(e) => setExamMonitoringConfig({...examMonitoringConfig, monitorWindowBlur: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5" />
-                                <span>Perte de focus (Switch application/onglet)</span>
-                              </label>
-                              <label className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300">
-                                <input type="checkbox" checked={examMonitoringConfig.preventCopyPaste} onChange={(e) => setExamMonitoringConfig({...examMonitoringConfig, preventCopyPaste: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5" />
-                                <span>Interdire Copier/Coller/Clic droit</span>
-                              </label>
-                            </div>
-                            <div className="space-y-2">
-                              <h4 className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 pb-1 mb-2">Vidéo & Identité</h4>
-                              <label className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300">
-                                <input type="checkbox" checked={examMonitoringConfig.requireCamera} onChange={(e) => setExamMonitoringConfig({...examMonitoringConfig, requireCamera: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5" />
-                                <span>Activer la caméra étudiante</span>
-                              </label>
-                              <label className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300">
-                                <input type="checkbox" checked={examMonitoringConfig.detectNoFace} onChange={(e) => setExamMonitoringConfig({...examMonitoringConfig, detectNoFace: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5" />
-                                <span>Signaler absence ou multiples visages</span>
-                              </label>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="pt-2 flex justify-end space-x-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsCreatingExam(false)}
-                          className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-500"
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {courses.map((course) => (
+                        <div
+                          key={course.id}
+                          onClick={() => setActiveCourse(course)}
+                          className="p-5 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/20 transition cursor-pointer flex flex-col justify-between space-y-4"
                         >
-                          Annuler
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold"
-                        >
-                          Créer mon examen
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
-                  {exams.length === 0 ? (
-                    <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center max-w-lg mx-auto">
-                      <Clock className="w-12 h-12 stroke-1 text-slate-300 mx-auto mb-2" />
-                      <h4 className="text-slate-900 font-bold text-sm">Générez un Quiz d'évaluation de type Moodle</h4>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Saisissez le sujet de votre devoir et observez l'IA extraire les concepts clefs et bâtir un modèle sur mesure compatible.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs">
-                      <div className="p-4 bg-slate-50 border-b border-slate-100 text-xs font-mono font-bold text-slate-400 uppercase tracking-wider">
-                        LISTE DES SESSIONS ET EXAMENS DISPONIBLES
-                      </div>
-                      <div className="divide-y divide-slate-100">
-                        {exams.map((ex) => (
-                          <div key={ex.id} className="p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:bg-slate-50 transition">
-                            <div>
-                              <div className="flex items-center space-x-2">
-                                <span className={`text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
-                                  ex.status === "published"
-                                    ? "bg-emerald-50 text-emerald-800 border-emerald-100"
-                                    : "bg-amber-50 text-amber-800 border-amber-100"
-                                }`}>
-                                  {ex.status === "published" ? "◉ Actif & Publié" : "Brouillon"}
-                                </span>
-                                <span className="text-xs text-slate-400 font-mono">
-                                  {ex.duration} Mins
-                                </span>
-                              </div>
-                              <h4 className="text-sm font-extrabold text-slate-900 mt-1">{ex.title}</h4>
-                              <p className="text-[11px] text-slate-500 mt-1">
-                                {ex.subjectText ? `${ex.subjectText.substring(0, 100)}...` : "Aucun document lié."}
-                              </p>
+                          <div>
+                            <div className="flex justify-between items-start">
+                              <h4 className="text-sm font-bold text-slate-900">{course.title}</h4>
+                              <span className="text-[10px] bg-indigo-100 text-indigo-700 font-mono font-bold px-2.5 py-0.5 rounded-full">
+                                {course.code}
+                              </span>
                             </div>
-
-                            <div className="flex items-center space-x-2 w-full md:w-auto shrink-0">
-                              <button
-                                onClick={() => setActiveExam(ex)}
-                                className="flex-1 md:flex-none text-xs bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-bold py-1.5 px-3 rounded-lg transition"
-                              >
-                                Configurer & Voir Quiz
-                              </button>
-                              <button
-                                onClick={() => deleteExam(ex.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 border border-slate-100 rounded-lg transition hover:bg-rose-50"
-                                title="Supprimer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
+                            <p className="text-xs text-slate-500 mt-1 line-clamp-2">{course.description}</p>
                           </div>
-                        ))}
-                      </div>
+                          <div className="flex justify-between items-center pt-3 border-t border-slate-200/50 text-xs font-semibold text-indigo-600">
+                            <span>Gérer les évaluations ({exams.filter(e => e.courseId === course.id).length})</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
-              )}
-
-              {/* DETAILED ACTIVE EXAM EDITOR & QUESTION LIST */}
-              {activeCourse && activeExam && (
-                <div className="space-y-6">
-                  {/* Detailed Exam Header bar */}
-                  <div className="bg-white rounded-2xl border border-slate-100 p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-                    <div>
-                      <div className="flex items-center space-x-2">
+              ) : (
+                <div className="space-y-8">
+                  {/* Course Navigation Header */}
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-3 px-4 flex items-center justify-between shadow-xs mb-4">
+                    <div className="flex items-center space-x-2 text-xs text-slate-600 dark:text-slate-300">
+                      <button
+                        onClick={() => { setActiveCourse(null); setActiveExam(null); }}
+                        className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 hover:text-indigo-600 font-semibold transition cursor-pointer"
+                        title="Retour à la liste des cours"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Mes Cours</span>
+                      </button>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                      {activeExam ? (
                         <button
                           onClick={() => setActiveExam(null)}
-                          className="flex items-center space-x-1 text-xs text-indigo-600 font-semibold"
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 hover:text-indigo-600 font-semibold transition cursor-pointer"
+                          title="Retour à la liste des examens de ce cours"
                         >
-                          <ChevronLeft className="w-3.5 h-3.5" />
-                          <span>Retour à la liste</span>
+                          {activeCourse.title}
                         </button>
-                        <span className="text-slate-300">/</span>
-                        <span className="text-xs text-slate-400 font-mono uppercase">{activeCourse.title}</span>
-                      </div>
-
-                      <h2 className="text-lg md:text-xl font-bold text-slate-950 mt-2 flex items-center space-x-2">
-                        <span>{activeExam.title}</span>
-                      </h2>
-
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        <span className="text-[10px] bg-slate-100 font-semibold text-slate-600 px-2 py-0.5 rounded flex items-center space-x-1">
-                          <Clock className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                          <span>{activeExam.duration} minutes</span>
+                      ) : (
+                        <span className="text-slate-900 dark:text-slate-100 font-bold px-2 py-1 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 rounded-lg">
+                          {activeCourse.title}
                         </span>
-                        <span className="text-[10px] bg-slate-100 font-semibold text-slate-600 px-2 py-0.5 rounded flex items-center space-x-1">
-                          <Calendar className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                          <span>Composition début: {new Date(activeExam.startDate).toLocaleDateString("fr-FR")}</span>
-                        </span>
-                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2.5 py-0.5 rounded-full border border-indigo-100">
-                          {activeExam.gradingScaleText || "Note brute"}
-                        </span>
-
-                        {/* Global Difficulty Rating */}
-                        {questions.length > 0 && (() => {
-                          let sum = 0;
-                          questions.forEach((q) => {
-                            const diff = q.difficulty || "Medium";
-                            if (diff === "Easy") sum += 1;
-                            else if (diff === "Hard") sum += 3;
-                            else sum += 2;
-                          });
-                          const avg = sum / questions.length;
-                          let statusColor = "bg-blue-50 text-blue-700 border-blue-100";
-                          let label = "Moyen (Medium)";
-                          if (avg <= 1.5) {
-                            statusColor = "bg-emerald-50 text-emerald-700 border-emerald-100";
-                            label = "Facile (Easy) ✅";
-                          } else if (avg >= 2.5) {
-                            statusColor = "bg-rose-50 text-rose-700 border-rose-100 font-bold animate-pulse";
-                            label = "Difficile (Hard) 🔥";
-                          }
-                          return (
-                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center space-x-1 ${statusColor}`} title={`Moyenne de difficulté : ${avg.toFixed(2)} / 3.0`}>
-                              <span>Difficulté Globale : {avg.toFixed(1)}/3.0 ({label})</span>
-                            </span>
-                          );
-                        })()}
-                      </div>
+                      )}
+                      {activeExam && (
+                        <>
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                          <span className="text-slate-900 dark:text-slate-100 font-bold px-2 py-1 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 rounded-lg truncate max-w-[200px]">
+                            {activeExam.title}
+                          </span>
+                        </>
+                      )}
                     </div>
 
-                    {/* Quick status publisher switch & Share button */}
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex flex-wrap gap-1.5 items-center bg-slate-100/80 p-1 rounded-xl">
+                    <div className="flex items-center space-x-2">
+                      {activeExam && (
                         <button
-                          onClick={() => handleToggleExamStatus("draft")}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                            activeExam.status === "draft"
-                              ? "bg-white text-slate-950 shadow-xs"
-                              : "text-slate-500 hover:text-slate-900"
-                          }`}
+                          onClick={() => setActiveExam(null)}
+                          className="text-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold px-3 py-1.5 rounded-xl transition flex items-center space-x-1 cursor-pointer"
                         >
-                          Brouillon
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Retour aux examens</span>
                         </button>
-                        <button
-                          onClick={() => handleToggleExamStatus("published")}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                            activeExam.status === "published"
-                              ? "bg-indigo-600 text-white shadow-xs"
-                              : "text-slate-500 hover:text-slate-900"
-                          }`}
-                        >
-                          Publié en Ligne 
-                        </button>
-                      </div>
-
+                      )}
                       <button
-                        type="button"
-                        onClick={() => {
-                          setSharedCodeModal({
-                            courseCode: activeCourse.code,
-                            examId: activeExam.id,
-                            examTitle: activeExam.title,
-                            courseTitle: activeCourse.title
-                          });
-                        }}
-                        className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold px-3.5 py-2.5 rounded-xl border border-emerald-100 transition flex items-center space-x-1.5 cursor-pointer"
-                        title="Partager le code d'inscription direct"
+                        onClick={() => { setActiveCourse(null); setActiveExam(null); }}
+                        className="text-xs bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 font-semibold px-3 py-1.5 rounded-xl transition flex items-center space-x-1 cursor-pointer"
                       >
-                        <Share2 className="w-3.5 h-3.5" />
-                        <span>Partager l'examen</span>
+                        <span>Liste des cours</span>
                       </button>
                     </div>
                   </div>
 
-                  {/* AI POWERED COEUR GENERATION BOX */}
-                  <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-3xl p-6 relative overflow-hidden shadow-lg">
-                    {/* Background glows */}
-                    <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl transform translate-x-1/3 -translate-y-1/3 pointer-events-none" />
-                    <div className="relative z-10 grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                      <div className="md:col-span-2 space-y-2">
-                        <div className="flex items-center space-x-1 text-xs bg-indigo-500/20 text-indigo-300 font-bold uppercase tracking-wider px-2 px-3 py-1 rounded-full w-fit">
-                          <Sparkles className="w-4 h-4 text-indigo-400 animate-spin" />
-                          <span>Générateur Intelligent Moodle</span>
-                        </div>
-                        <h3 className="text-lg font-bold tracking-tight text-white font-sans sm:text-xl">
-                          Analysez vos fichiers de cours & concevez le test
-                        </h3>
-                        <p className="text-xs text-indigo-100 max-w-xl">
-                          L'IA effectuera l'extraction automatique des concepts majeurs du sujet, en générant instantanément des QCM, questions d'appariement, Cloze ou compositions ouverts, basés sur le corrigé et respectant votre barème d’enseignement.
-                        </p>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <button
-                          onClick={handleAiGeneration}
-                          disabled={aiGenerating || !activeExam.subjectText}
-                          className="w-full bg-white hover:bg-indigo-50 text-indigo-950 font-sans font-extrabold text-xs py-3 px-5 rounded-2xl shadow-md tracking-wider transition-all disabled:opacity-50 flex items-center justify-center space-x-1.5"
-                        >
-                          <Sparkles className="w-4 h-4 text-indigo-600 hover:animate-spin" />
-                          <span>
-                            {aiGenerating ? "GÉNÉRATION EN COURS..." : "GÉNÉRER / RÉGÉNÉRER"}
-                          </span>
-                        </button>
-                        {!activeExam.subjectText && (
-                          <p className="text-[10px] text-amber-300 text-center mt-1">
-                            ⚠️ Saisissez ou modifiez le sujet/cours d'abord.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* ANALYTICS RADAR PANEL */}
-                  <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-md border border-slate-800">
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-                      <div className="lg:col-span-5 space-y-4">
-                        <div className="inline-flex items-center space-x-1.5 bg-indigo-500/10 text-indigo-300 px-3 py-1 rounded-full text-xs font-semibold border border-indigo-500/20">
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>Analyses &amp; Didactique de Promotion</span>
-                        </div>
-                        <h3 className="text-xl font-bold tracking-tight">Distribution Interactive par Thématiques</h3>
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          Ce graphique radar analyse les résultats moyens des étudiants par typologie ou thématique de questions didactiques. Ajustez vos futurs barèmes ou identifiez les difficultés d'assimilation immédiatement.
-                        </p>
-                        
-                        <div className="space-y-2 pt-2 border-t border-slate-800">
-                          <div className="flex items-center justify-between text-xs pb-1.5">
-                            <span className="text-slate-400">Total Copies Soumises :</span>
-                            <span className="font-mono font-bold text-white bg-slate-800/80 px-2 py-0.5 rounded-md border border-slate-700">{submissions.length} copie(s)</span>
+                  {activeExam ? (
+                    <div className="space-y-6">
+                      {/* Detailed Exam Header bar */}
+                      <div className="bg-white rounded-2xl border border-slate-100 p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => setActiveExam(null)}
+                              className="flex items-center space-x-1 text-xs text-indigo-600 font-semibold"
+                            >
+                              <ChevronLeft className="w-3.5 h-3.5" />
+                              <span>Retour à la liste</span>
+                            </button>
+                            <span className="text-slate-300">/</span>
+                            <span className="text-xs text-slate-400 font-mono uppercase">{activeCourse.title}</span>
                           </div>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-400">Moyenne Générale de Classe :</span>
-                            <span className="font-mono font-bold text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
-                              {submissions.length > 0
-                                ? `${(submissions.reduce((acc, s) => acc + (s.score || 0), 0) / submissions.length).toFixed(1)} / 20 pts`
-                                : "En attente d'évaluations"
-                              }
+
+                          <h2 className="text-lg md:text-xl font-bold text-slate-950 mt-2 flex items-center space-x-2">
+                            <span>{activeExam.title}</span>
+                          </h2>
+
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <span className="text-[10px] bg-slate-100 font-semibold text-slate-600 px-2 py-0.5 rounded flex items-center space-x-1">
+                              <Clock className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                              <span>{activeExam.duration} minutes</span>
+                            </span>
+                            <span className="text-[10px] bg-slate-100 font-semibold text-slate-600 px-2 py-0.5 rounded flex items-center space-x-1">
+                              <Calendar className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                              <span>Composition début: {new Date(activeExam.startDate).toLocaleDateString("fr-FR")}</span>
+                            </span>
+                            <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2.5 py-0.5 rounded-full border border-indigo-100">
+                              {activeExam.gradingScaleText || "Note brute"}
                             </span>
                           </div>
                         </div>
 
-                        <div className="pt-4 border-t border-slate-800 flex justify-start">
-                          <button
-                            type="button"
-                            onClick={handleDownloadStatsPDF}
-                            className="bg-indigo-600 hover:bg-indigo-700 hover:scale-102 active:scale-98 text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow-xs transition-all duration-150 flex items-center space-x-2 cursor-pointer focus:outline-hidden"
-                          >
-                            <FileText className="w-4 h-4 text-indigo-200" />
-                            <span>Exporter les statistiques (PDF)</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="lg:col-span-7 flex justify-center items-center h-[280px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <RadarChart cx="50%" cy="50%" outerRadius="80%" data={(() => {
-                            const themes = [
-                              { subject: "Théorie & Concepts", A: 0, fullMark: 100 },
-                              { subject: "Logique & Diagnostic", A: 0, fullMark: 100 },
-                              { subject: "Appariement & Syntaxe", A: 0, fullMark: 100 },
-                              { subject: "Calculs & Analyse", A: 0, fullMark: 100 },
-                              { subject: "Démonstration & Rédaction", A: 0, fullMark: 100 }
-                            ];
-
-                            if (submissions.length === 0 || questions.length === 0) {
-                              // If there are no actual records, show an informative visual baseline
-                              return themes.map(t => ({ ...t, A: 60 }));
-                            }
-
-                            const themeScores: Record<string, { obtained: number; total: number }> = {
-                              "Théorie & Concepts": { obtained: 0, total: 0 },
-                              "Logique & Diagnostic": { obtained: 0, total: 0 },
-                              "Appariement & Syntaxe": { obtained: 0, total: 0 },
-                              "Calculs & Analyse": { obtained: 0, total: 0 },
-                              "Démonstration & Rédaction": { obtained: 0, total: 0 }
-                            };
-
-                            questions.forEach(q => {
-                              const theme = getQuestionTheme(q);
-                              if (themeScores[theme]) {
-                                themeScores[theme].total += (q.points || 1) * submissions.length;
-                              }
-                            });
-
-                            submissions.forEach(sub => {
-                              questions.forEach(q => {
-                                const theme = getQuestionTheme(q);
-                                if (!themeScores[theme]) return;
-
-                                const studentAns = sub.answers[q.id];
-                                if (q.type === "essay") {
-                                  const feed = sub.essayFeedbacks?.[q.id];
-                                  if (feed && feed.comment !== "En attente de correction par l'enseignant.") {
-                                    themeScores[theme].obtained += feed.score || 0;
-                                  }
-                                } else if (q.type === "description") {
-                                  // skip points
-                                } else {
-                                  let isCorrect = false;
-                                  if (!studentAns) {
-                                    isCorrect = false;
-                                  } else if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
-                                    isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
-                                  } else if (q.type === "matching") {
-                                    try {
-                                      const matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
-                                      let totalMatches = 0;
-                                      const opts = q.options || [];
-                                      const targets = q.matchingTargets || [];
-                                      opts.forEach((key: string, idx: number) => {
-                                        if (matchingMap[key] === targets[idx]) totalMatches++;
-                                      });
-                                      if (opts.length > 0) {
-                                        themeScores[theme].obtained += (totalMatches / opts.length) * (q.points || 0);
-                                        return;
-                                      }
-                                    } catch { /* skip */ }
-                                  }
-
-                                  if (isCorrect) {
-                                    themeScores[theme].obtained += q.points || 0;
-                                  }
-                                }
-                              });
-                            });
-
-                            return Object.keys(themeScores).map(theme => {
-                              const { obtained, total } = themeScores[theme];
-                              const percentage = total > 0 ? parseFloat(((obtained / total) * 100).toFixed(1)) : 0;
-                              return {
-                                subject: theme,
-                                A: percentage,
-                                fullMark: 100
-                              };
-                            });
-                          })()}>
-                            <PolarGrid stroke="#4338ca" opacity={0.3} />
-                            <PolarAngleAxis dataKey="subject" tick={{ fill: "#cbd5e1", fontSize: 9 }} />
-                            <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: "#64748b", fontSize: 7 }} />
-                            <Radar name="Classe" dataKey="A" stroke="#6366f1" fill="#4f46e5" fillOpacity={0.6} />
-                          </RadarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* EXAM TABS */}
-                  <div className="flex space-x-2 border-b border-slate-200">
-                    <button
-                      onClick={() => setTeacherExamTab('editor')}
-                      className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors ${
-                        teacherExamTab === 'editor' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      Éditeur & Questions
-                    </button>
-                    <button
-                      onClick={() => setTeacherExamTab('monitoring')}
-                      className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors flex items-center space-x-1 ${
-                        teacherExamTab === 'monitoring' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      <span>Surveillance E-Proctoring</span>
-                      {activeExam.monitoringConfig?.active && (
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 ml-1"></span>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setTeacherExamTab('analytics')}
-                      className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
-                        teacherExamTab === 'analytics' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      <span>📊 Analyses & Statistiques</span>
-                    </button>
-                  </div>
-
-                  {teacherExamTab === 'editor' && (
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                      {/* Left block options */}
-                      <div className="lg:col-span-4 space-y-6">
-                      
-                      {/* Document panel viewer */}
-                      <div className="bg-white rounded-2xl border border-slate-100 p-5">
-                        <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest mb-3">
-                          DOCUMENTS ASSOCIÉS
-                        </h3>
-                        
-                        <div className="space-y-4">
-                          <div>
-                            <span className="block text-[10px] font-bold text-slate-500 uppercase">Sujet Actif</span>
-                            <div className="text-xs text-slate-705 bg-slate-50 p-2.5 rounded-lg border border-slate-100 mt-1 max-h-40 overflow-y-auto leading-relaxed">
-                              <MathRenderer text={activeExam.subjectText || "Aucun texte."} />
-                            </div>
-                          </div>
-
-                          <div>
-                            <span className="block text-[10px] font-bold text-slate-500 uppercase">Soluté / Corrigé direct</span>
-                            <div className="text-xs text-slate-705 bg-slate-50 p-2.5 rounded-lg border border-slate-100 mt-1 max-h-40 overflow-y-auto leading-relaxed">
-                              <MathRenderer text={activeExam.solutionText || "Aucun corrigé spécifié."} />
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Button modal to update these settings */}
-                        <div className="mt-4 pt-4 border-t border-slate-100">
+                        <div className="flex items-center space-x-2 shrink-0">
                           <button
                             onClick={() => {
-                              setExamTitle(activeExam.title);
-                              setExamSubject(activeExam.subjectText || "");
-                              setExamSolution(activeExam.solutionText || "");
-                              setExamDuration(String(activeExam.duration));
-                              setExamGradingScale(activeExam.gradingScaleText || "Sur 20 points");
-                              setIsCreatingExam(true);
+                              setSharedCodeModal({
+                                courseCode: activeCourse.code,
+                                examId: activeExam.id,
+                                examTitle: activeExam.title,
+                                courseTitle: activeCourse.title
+                              });
                             }}
-                            className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold py-2 rounded-xl transition"
+                            className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs py-2 px-3 rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
                           >
-                            Modifier documents & paramètres
+                            <Share2 className="w-4 h-4" />
+                            <span>Partager le lien</span>
                           </button>
                         </div>
                       </div>
 
-                      {/* Exports to LMS Moodle or Notes Excel */}
-                      <div className="bg-white rounded-2xl border border-slate-100 p-5 space-y-3">
-                        <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest mb-1">
-                          EXPORTS & LIVRABLES
-                        </h3>
-
-                        <a
-                          href={getApiUrl(`/api/exams/${activeExam.id}/moodle-xml`)}
-                          download
-                          className="w-full bg-slate-50 border border-slate-200 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 text-xs font-semibold py-2.5 px-3 rounded-xl transition flex items-center justify-between"
+                      {/* Teacher Exam Sub-Tabs: editor | monitoring | analytics */}
+                      <div className="flex items-center space-x-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+                        <button
+                          onClick={() => setTeacherExamTab("editor")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                            teacherExamTab === "editor"
+                              ? "bg-indigo-600 text-white shadow-md"
+                              : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800"
+                          }`}
                         >
-                          <span className="flex items-center space-x-2">
-                            <FileCode className="w-4 h-4 text-indigo-600" />
-                            <span>Export compatible Moodle XML</span>
-                          </span>
-                          <Download className="w-3.5 h-3.5 text-slate-400" />
-                        </a>
-
-                        <a
-                          href={getApiUrl(`/api/exams/${activeExam.id}/export-grades`)}
-                          download
-                          className="w-full bg-slate-50 border border-slate-200 hover:bg-emerald-50 hover:border-emerald-200 text-slate-700 text-xs font-semibold py-2.5 px-3 rounded-xl transition flex items-center justify-between"
+                          <BookOpen className="w-4 h-4" />
+                          <span>Éditeur de Questions ({activeExam.questions?.length || 0})</span>
+                        </button>
+                        <button
+                          onClick={() => setTeacherExamTab("monitoring")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer relative ${
+                            teacherExamTab === "monitoring"
+                              ? "bg-indigo-600 text-white shadow-md"
+                              : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800"
+                          }`}
                         >
-                          <span className="flex items-center space-x-2">
-                            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                            <span>Export des notes d'étudiants (CSV)</span>
-                          </span>
-                          <Download className="w-3.5 h-3.5 text-slate-400" />
-                        </a>
+                          <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
+                          <span>Supervision en Direct</span>
+                        </button>
+                        <button
+                          onClick={() => setTeacherExamTab("analytics")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                            teacherExamTab === "analytics"
+                              ? "bg-indigo-600 text-white shadow-md"
+                              : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800"
+                          }`}
+                        >
+                          <BarChart2 className="w-4 h-4" />
+                          <span>Analyses & Statistiques</span>
+                        </button>
                       </div>
 
-                      {/* Active Submissions & grading panel for Composition */}
-                      <div className="bg-white rounded-2xl border border-slate-100 p-5 space-y-3">
-                        <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">
-                          COPIES ÉTUDIANTS ({submissions.length})
-                        </h3>
+                      {teacherExamTab === "editor" && (
+                        <div className="space-y-6">
+                          <ExamQuestionEditor
+                            exam={activeExam}
+                            onUpdateExam={(updated) => {
+                              setActiveExam(updated);
+                              setExams(exams.map(e => e.id === updated.id ? updated : e));
+                            }}
+                            triggerToast={triggerToast}
+                          />
+                        </div>
+                      )}
 
-                        {submissions.length === 0 ? (
-                          <p className="text-[11px] text-slate-400">Aucune copie reçue pour le moment.</p>
-                        ) : (
-                          <div className="space-y-2 mt-2">
-                            {submissions.map((sub) => (
-                              <div
-                                key={sub.id}
-                                onClick={() => {
-                                  setTeacherSelectedSub(sub);
-                                  setSelectedSubReport(null);
-                                }}
-                                className={`p-3 rounded-lg border text-left cursor-pointer transition ${
-                                  teacherSelectedSub && teacherSelectedSub.id === sub.id
-                                    ? "bg-indigo-50 border-indigo-300"
-                                    : "bg-slate-50 hover:bg-slate-100/80 border-slate-200"
-                                }`}
-                              >
-                                <div className="flex justify-between items-center text-[10px] text-slate-400">
-                                  <span>{sub.studentClass || "Étudiant"}</span>
-                                  <span className="font-mono text-[9px]">{new Date(sub.submittedAt).toLocaleDateString("fr-FR")}</span>
+                      {teacherExamTab === "monitoring" && (
+                        <div className="space-y-6">
+                          <ExamMonitoringView
+                            exam={activeExam}
+                            course={activeCourse}
+                            triggerToast={triggerToast}
+                          />
+                        </div>
+                      )}
+
+                      {teacherExamTab === "analytics" && renderTeacherAnalytics()}
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {exams.length === 0 ? (
+                        <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center max-w-lg mx-auto">
+                          <Clock className="w-12 h-12 stroke-1 text-slate-300 mx-auto mb-2" />
+                          <h4 className="text-slate-900 font-bold text-sm">Générez un Quiz d'évaluation de type Moodle</h4>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Saisissez le sujet de votre devoir et observez l ia extraire les concepts clefs et bâtir un modèle sur mesure compatible.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs">
+                          <div className="p-4 bg-slate-50 border-b border-slate-100 text-xs font-mono font-bold text-slate-400 uppercase tracking-wider">
+                            LISTE DES SESSIONS ET EXAMENS DISPONIBLES
+                          </div>
+                          <div className="divide-y divide-slate-100">
+                            {exams.map((ex) => (
+                              <div key={ex.id} className="p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:bg-slate-50 transition">
+                                <div>
+                                  <div className="flex items-center space-x-2">
+                                    <span className={`text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                                      ex.status === "published"
+                                        ? "bg-emerald-50 text-emerald-800 border-emerald-100"
+                                        : "bg-amber-50 text-amber-800 border-amber-100"
+                                    }`}>
+                                      {ex.status === "published" ? "◉ Actif & Publié" : "Brouillon"}
+                                    </span>
+                                    <span className="text-xs text-slate-400 font-mono">
+                                      {ex.duration} Mins
+                                    </span>
+                                  </div>
+                                  <h4 className="text-sm font-extrabold text-slate-900 mt-1">{ex.title}</h4>
+                                  <p className="text-[11px] text-slate-500 mt-1">
+                                    {ex.subjectText ? `${ex.subjectText.substring(0, 100)}...` : "Aucun document lié."}
+                                  </p>
                                 </div>
-                                <p className="text-xs font-bold text-slate-900 mt-1 truncate">{sub.studentEmail}</p>
-                                
-                                <div className="flex items-center justify-between mt-2">
-                                  <span className="text-[10px] tracking-wide font-mono px-1.5 py-0.5 rounded uppercase font-semibold">
-                                    {sub.score === null ? "🖋️ À Corriger" : "✓ Noté"}
-                                  </span>
-                                  <span className="text-xs font-bold text-slate-950 font-mono">
-                                    {sub.score === null ? "N/A" : `${sub.score} pts`}
-                                  </span>
+
+                                <div className="flex items-center space-x-2 w-full md:w-auto shrink-0">
+                                  <button
+                                    onClick={() => setActiveExam(ex)}
+                                    className="flex-1 md:flex-none text-xs bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-bold py-1.5 px-3 rounded-lg transition"
+                                  >
+                                    Configurer & Voir Quiz
+                                  </button>
+                                  <button
+                                    onClick={() => deleteExam(ex.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 border border-slate-100 rounded-lg transition hover:bg-rose-50"
+                                    title="Supprimer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
                                 </div>
                               </div>
                             ))}
                           </div>
-                        )}
-                      </div>
-
-                    </div>
-
-                    {/* Right column: Questions Workspace */}
-                    <div className="lg:col-span-8 space-y-6">
-
-                      {/* Manual Question addition component toggle */}
-                      <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100">
-                        <div>
-                          <h3 className="text-xs font-extrabold text-slate-900">Banque de Questions ({questions.length})</h3>
-                          <p className="text-[10px] text-slate-400">Ajoutez, éditez ou réorganisez votre barème interactif compatible Moodle</p>
-                        </div>
-
-                        <button
-                          onClick={() => setIsAddingQuestion(!isAddingQuestion)}
-                          className="bg-slate-900 hover:bg-slate-950 text-white text-xs py-1.5 px-3 rounded-lg font-bold flex items-center space-x-1 transition"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>{isAddingQuestion ? "Fermer l'ajout" : "Créer Question"}</span>
-                        </button>
-                      </div>
-
-                      {/* Search & Fast Filters inside 'Bank of Questions' */}
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                        <div className="flex-1 bg-white p-3.5 rounded-xl border border-slate-100 flex items-center space-x-2.5">
-                          <Search className="w-4 h-4 text-slate-400 shrink-0" />
-                          <input
-                            type="text"
-                            placeholder="Rechercher des questions par mot-clé dans les énoncés..."
-                            value={questionSearchQuery}
-                            onChange={(e) => setQuestionSearchQuery(e.target.value)}
-                            className="w-full text-xs text-slate-800 bg-transparent placeholder-slate-400 focus:outline-hidden"
-                          />
-                          {questionSearchQuery && (
-                            <button
-                              type="button"
-                              onClick={() => setQuestionSearchQuery("")}
-                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold uppercase transition focus:outline-none shrink-0"
-                            >
-                              Effacer
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Quick filter toggle to show only 'Hard' questions */}
-                        <button
-                          type="button"
-                          onClick={() => setShowOnlyHardQuestions(!showOnlyHardQuestions)}
-                          className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer select-none shrink-0 ${
-                            showOnlyHardQuestions
-                              ? "bg-rose-50 border-rose-250 text-rose-700 shadow-xs"
-                              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-100"
-                          }`}
-                        >
-                          <span className={`w-2 h-2 rounded-full ${showOnlyHardQuestions ? "bg-rose-500 animate-pulse" : "bg-slate-350"}`} />
-                          <span>Seulement "Hard" 🔥</span>
-                          <span className={`${showOnlyHardQuestions ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-700"} rounded-full px-1.5 py-0.2 font-mono text-[9px]`}>
-                            {questions.filter((q) => q.difficulty === "Hard").length}
-                          </span>
-                        </button>
-                      </div>
-
-                      {/* Manual Question Adder Panel */}
-                      {isAddingQuestion && (
-                        <form onSubmit={handleManualAddQuestion} className="bg-white rounded-2xl p-6 border border-indigo-100 shadow-md space-y-4">
-                          <h4 className="font-bold text-xs text-slate-900">Configurer une question personnalisée</h4>
-                          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-                            <div>
-                              <label className="block text-slate-500 font-bold mb-1 uppercase">Type de question</label>
-                              <select
-                                value={newQType}
-                                onChange={(e) => setNewQType(e.target.value as QuestionType)}
-                                className="w-full border border-slate-200 rounded-lg p-1.5"
-                              >
-                                <option value="mcq">QCM / QCU</option>
-                                <option value="true_false">Vrai / Faux</option>
-                                <option value="matching">Appariement</option>
-                                <option value="short_answer">Réponse courte</option>
-                                <option value="numerical">Numérique</option>
-                                <option value="cloze">Texte à trous (Cloze)</option>
-                                <option value="essay">Composition (Correction manuelle)</option>
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-500 font-bold mb-1 uppercase">Points alloués</label>
-                              <input
-                                type="number"
-                                step="0.5"
-                                required
-                                value={newQPoints}
-                                onChange={(e) => setNewQPoints(e.target.value)}
-                                className="w-full border border-slate-200 rounded-lg p-1.5 font-mono"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-500 font-bold mb-1 uppercase">Réponse attendue exacte</label>
-                              <input
-                                type="text"
-                                required
-                                placeholder="Valeur correcte (ex: true, Paris, a, b)"
-                                value={newQCorrectAnswer}
-                                onChange={(e) => setNewQCorrectAnswer(e.target.value)}
-                                className="w-full border border-slate-200 rounded-lg p-1.5"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-500 font-bold mb-1 uppercase">Difficulté</label>
-                              <select
-                                value={newQDifficulty}
-                                onChange={(e) => setNewQDifficulty(e.target.value as "Easy" | "Medium" | "Hard")}
-                                className="w-full border border-slate-200 rounded-lg p-1.5"
-                              >
-                                <option value="Easy">Facile (Easy)</option>
-                                <option value="Medium">Moyen (Medium)</option>
-                                <option value="Hard">Difficile (Hard)</option>
-                              </select>
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-2">
-                              Énoncé de la question
-                            </label>
-                            <ScientificRichEditor
-                              value={newQStatement}
-                              onChange={(val) => setNewQStatement(val)}
-                              placeholder="ex: Résoudre l'équation suivante : $$2x + 5 = 15$$. Déterminer $x$."
-                              rows={3}
-                            />
-                          </div>
-
-                          {newQType === "cloze" && (
-                            <div className="p-4 bg-indigo-50/50 dark:bg-slate-850 rounded-2xl border border-indigo-100 dark:border-slate-800 text-xs space-y-1.5 animate-fade-in">
-                              <span className="font-bold text-indigo-900 dark:text-indigo-400 block">Aide syntaxe Cloze Moodle</span>
-                              <p className="text-[11px] text-slate-500 leading-relaxed">
-                                Saisissez votre texte avec des choix d'options délimitées par des accolades ou barres verticales :
-                                <br />
-                                <code className="bg-white dark:bg-slate-900 px-1 py-0.5 rounded font-mono text-indigo-700">L'apprentissage stochastique est {"{rapide|lent|inexistant}"}.</code>
-                                <br />
-                                La bonne réponse doit être stockée dans la case "Réponse attendue exacte" ci-dessous.
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Options only for MCQ or Matching left items */}
-                          {(newQType === "mcq" || newQType === "matching") && (
-                            <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs">
-                              <span className="font-bold text-slate-600 block">Options possibles</span>
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                {newQOptions.map((v, i) => (
-                                  <div key={i} className="flex flex-col gap-1">
-                                    <span className="text-[10px] text-slate-400">Option {i + 1}</span>
-                                    <input
-                                      type="text"
-                                      value={v}
-                                      onChange={(e) => {
-                                        const next = [...newQOptions];
-                                        next[i] = e.target.value;
-                                        setNewQOptions(next);
-                                      }}
-                                      placeholder={`Option ${i + 1}`}
-                                      className="border border-slate-200 p-1.5 rounded bg-white text-xs"
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setNewQOptions((p) => [...p, ""])}
-                                className="text-[10px] text-indigo-600 font-semibold"
-                              >
-                                + Ajouter plus d'options
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Targets only for Matching */}
-                          {newQType === "matching" && (
-                            <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs">
-                              <span className="font-bold text-slate-600 block">Cibles correspondantes (même ordre)</span>
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                {newQTargets.map((v, i) => (
-                                  <div key={i} className="flex flex-col gap-1">
-                                    <span className="text-[10px] text-slate-400">Cible {i + 1}</span>
-                                    <input
-                                      type="text"
-                                      value={v}
-                                      onChange={(e) => {
-                                        const next = [...newQTargets];
-                                        next[i] = e.target.value;
-                                        setNewQTargets(next);
-                                      }}
-                                      placeholder={`Cible ${i + 1}`}
-                                      className="border border-slate-200 p-1.5 rounded bg-white text-xs"
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setNewQTargets((p) => [...p, ""])}
-                                className="text-[10px] text-indigo-600 font-semibold"
-                              >
-                                + Ajouter plus d'associations
-                              </button>
-                            </div>
-                          )}
-
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
-                              Justification / Explication sémantique corrigée
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="Cette explication sera affichée aux élèves à la fin..."
-                              value={newQExplanation}
-                              onChange={(e) => setNewQExplanation(e.target.value)}
-                              className="w-full border border-slate-200 rounded-xl p-2 text-xs"
-                            />
-                          </div>
-
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="submit"
-                              className="bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-xs transition"
-                            >
-                              Enregistrer Question
-                            </button>
-                          </div>
-                        </form>
-                      )}
-
-                      {/* Student active evaluation pane if selected */}
-                      {teacherSelectedSub && (
-                        <div className="bg-white rounded-2xl border border-indigo-200 p-6 space-y-4">
-                          <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-                            <div>
-                              <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold uppercase">
-                                Revue de copie étudiant
-                              </span>
-                              <h4 className="text-sm font-bold text-slate-900 mt-1">{teacherSelectedSub.studentEmail}</h4>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPrintSubmission({
-                                    submission: teacherSelectedSub,
-                                    exam: activeExam,
-                                    course: activeCourse,
-                                    questions: questions
-                                  });
-                                }}
-                                className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 text-xs font-bold px-3 py-1.5 rounded-xl border border-emerald-100/50 dark:border-emerald-900/40 transition flex items-center space-x-1 cursor-pointer"
-                                title="Exporter en PDF professionnel"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                <span>Exporter la copie (PDF)</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setTeacherSelectedSub(null)}
-                                className="text-slate-400 hover:text-slate-700 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 p-1.5 rounded-full transition cursor-pointer"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Question responses detailed cards */}
-                          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
-                            {questions.map((q, qIndex) => {
-                              const ansVal = teacherSelectedSub.answers[q.id];
-                              const isMcqCorrect = q.correctAnswer.trim().toLowerCase() === String(ansVal || "").trim().toLowerCase();
-
-                              return (
-                                <div key={q.id} className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-xs">
-                                  <div className="flex justify-between font-bold mb-1 text-[11px]">
-                                    <span className="text-slate-700">Question {qIndex + 1} ({q.type.toUpperCase()})</span>
-                                    <span className="text-indigo-600 font-mono font-bold">{q.points} Points</span>
-                                  </div>
-
-                                  <div className="font-semibold text-slate-909 mb-2">
-                                    <MathRenderer text={q.statement} />
-                                  </div>
-
-                                  <div className="p-3 bg-white rounded-lg border border-slate-200/60 font-medium font-sans">
-                                    <span className="text-[10px] text-slate-400 block font-mono">RÉPONSE REMISE :</span>
-                                    <span className="text-indigo-900 text-xs break-all">
-                                      {typeof ansVal === "object" ? JSON.stringify(ansVal) : <MathRenderer text={String(ansVal || "Aucune réponse fournie.")} />}
-                                    </span>
-                                  </div>
-
-                                  {/* Auto Correction or Essay Manual corrections */}
-                                  {q.type !== "essay" ? (
-                                    <div className="mt-2 flex items-center space-x-2 text-xs font-bold font-mono">
-                                      {isMcqCorrect ? (
-                                        <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                                          ✓ Correct (+{q.points} pt)
-                                        </span>
-                                      ) : (
-                                        <span className="text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-100">
-                                          ✗ incorrect (Réponse attendue: {q.correctAnswer})
-                                        </span>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    /* Grade form for essay composition */
-                                    <div className="mt-3 bg-indigo-50/50 dark:bg-indigo-950/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/40 space-y-2">
-                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                                        <span className="text-[10px] font-bold text-indigo-800 dark:text-indigo-300">🖋️ Saisie du barème manuel pour composition :</span>
-                                        {teacherSelectedSub.essayFeedbacks?.[q.id]?.similarityPct !== undefined && (
-                                          <span className="text-[10px] font-mono font-bold bg-indigo-100/80 dark:bg-indigo-900 border border-indigo-200 dark:border-indigo-850 text-indigo-900 dark:text-indigo-200 px-2 py-0.5 rounded flex items-center space-x-1 self-start">
-                                            <span>Simil. Levenshtein :</span>
-                                            <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">{teacherSelectedSub.essayFeedbacks[q.id].similarityPct}%</span>
-                                          </span>
-                                        )}
-                                      </div>
-                                      
-                                      <div className="flex items-center space-x-2">
-                                        <input
-                                          type="number"
-                                          max={q.points}
-                                          min="0"
-                                          step="0.5"
-                                          placeholder="Note accordée"
-                                          defaultValue={teacherSelectedSub.essayFeedbacks?.[q.id]?.score || 0}
-                                          onChange={(e) => {
-                                            const val = parseFloat(e.target.value) || 0;
-                                            (window as any)[`points_${q.id}`] = val;
-                                          }}
-                                          className="bg-white border border-slate-200 rounded px-2 py-1 text-xs text-slate-800 font-mono w-24"
-                                        />
-                                        <input
-                                          type="text"
-                                          placeholder="Commentaire ou feedback..."
-                                          defaultValue={teacherSelectedSub.essayFeedbacks?.[q.id]?.comment || ""}
-                                          onChange={(e) => {
-                                            (window as any)[`comment_${q.id}`] = e.target.value;
-                                          }}
-                                          className="bg-white border border-slate-200 rounded px-2 py-1 text-xs text-slate-800 flex-1"
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const pts = (window as any)[`points_${q.id}`] ?? (teacherSelectedSub.essayFeedbacks?.[q.id]?.score || 0);
-                                            const com = (window as any)[`comment_${q.id}`] ?? (teacherSelectedSub.essayFeedbacks?.[q.id]?.comment || "");
-                                            submitTeacherEssayGrade(teacherSelectedSub.id, q.id, pts, com);
-                                          }}
-                                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold px-3 py-1 rounded transition"
-                                        >
-                                          Valider Note
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
                         </div>
                       )}
-
-                      {/* Main Scrollable Question Cards */}
-                      {questions.length === 0 ? (
-                        <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center">
-                          <HelpCircle className="w-12 h-12 stroke-1 text-slate-300 mx-auto mb-2" />
-                          <h4 className="text-slate-900 font-semibold text-sm">Aucune question dans la banque</h4>
-                          <p className="text-xs text-slate-400 mt-1">
-                            Utilisez le générateur automatique avec l'IA ci-dessus ou ajoutez des questions manuellement avec le bouton.
-                          </p>
-                        </div>
-                      ) : filteredQuestions.length === 0 ? (
-                        <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center">
-                          <Search className="w-12 h-12 stroke-1 text-slate-300 mx-auto mb-2" />
-                          <h4 className="text-slate-900 font-semibold text-sm">Aucun résultat trouvé</h4>
-                          <p className="text-xs text-slate-400 mt-1">
-                            Aucune question ne correspond au mot-clé "{questionSearchQuery}". Essayez une autre recherche.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {filteredQuestions.map((q, idx) => (
-                            <div key={q.id} className="bg-white rounded-2xl border border-slate-100 p-5 space-y-4 relative">
-                              <div className="flex justify-between items-start gap-4">
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-mono font-bold text-slate-400">
-                                    QUESTION {idx + 1}
-                                  </span>
-                                  <span className="text-[9px] bg-slate-100 font-bold px-2 py-0.5 rounded text-slate-600">
-                                    {q.type.toUpperCase()}
-                                  </span>
-                                  {q.type === "essay" && (
-                                    <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 px-2 py-0.5 rounded font-bold">
-                                      🖋️ Correction manuelle
-                                    </span>
-                                  )}
-                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase ${
-                                    q.difficulty === "Easy"
-                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-400"
-                                      : q.difficulty === "Hard"
-                                      ? "bg-rose-50 text-rose-700 border-rose-100 dark:bg-rose-950/20 dark:text-rose-400"
-                                      : "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-950/20 dark:text-blue-400"
-                                  }`}>
-                                    {q.difficulty || "Medium"}
-                                  </span>
-                                </div>
-
-                                <div className="flex items-center space-x-1 shrink-0">
-                                  <button
-                                    onClick={() => setEditingQuestionId(editingQuestionId === q.id ? null : q.id)}
-                                    className="p-1 px-2.5 bg-slate-50 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg text-xs font-semibold text-slate-500 transition"
-                                  >
-                                    Éditer
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteQuestion(q.id)}
-                                    className="p-1 text-slate-400 hover:text-rose-600 transition"
-                                    title="Supprimer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {editingQuestionId === q.id ? (
-                                /* Full inline question editor */
-                                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60 space-y-3 text-xs">
-                                  <div className="space-y-1">
-                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Énoncé</label>
-                                    <ScientificRichEditor
-                                      value={q.statement}
-                                      onChange={(val) => {
-                                        setQuestions((p) => p.map((itm) => (itm.id === q.id ? { ...itm, statement: val } : itm)));
-                                      }}
-                                      placeholder="Éléments ou énoncé de la question..."
-                                      rows={2}
-                                    />
-                                  </div>
-
-                                  <div className="grid grid-cols-3 gap-3">
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Points accordés</label>
-                                      <input
-                                        type="number"
-                                        step="0.5"
-                                        value={q.points}
-                                        onChange={(e) => {
-                                          const nextPts = parseFloat(e.target.value) || 0;
-                                          setQuestions((p) => p.map((itm) => (itm.id === q.id ? { ...itm, points: nextPts } : itm)));
-                                        }}
-                                        className="w-full border border-slate-200 rounded p-1.5 bg-white font-mono"
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Réponse attendue exacte</label>
-                                      <input
-                                        type="text"
-                                        value={q.correctAnswer}
-                                        onChange={(e) => {
-                                          const nextAns = e.target.value;
-                                          setQuestions((p) => p.map((itm) => (itm.id === q.id ? { ...itm, correctAnswer: nextAns } : itm)));
-                                        }}
-                                        className="w-full border border-slate-200 rounded p-1.5 bg-white font-mono"
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Difficulté</label>
-                                      <select
-                                        value={q.difficulty || "Medium"}
-                                        onChange={(e) => {
-                                          const nextDiff = e.target.value as "Easy" | "Medium" | "Hard";
-                                          setQuestions((p) => p.map((itm) => (itm.id === q.id ? { ...itm, difficulty: nextDiff } : itm)));
-                                        }}
-                                        className="w-full border border-slate-200 rounded p-1.5 bg-white font-sans text-xs"
-                                      >
-                                        <option value="Easy">Facile (Easy)</option>
-                                        <option value="Medium">Moyen (Medium)</option>
-                                        <option value="Hard">Difficile (Hard)</option>
-                                      </select>
-                                    </div>
-                                  </div>
-
-                                  {/* Explication */}
-                                  <div>
-                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Explication ou correction type</label>
-                                    <input
-                                      type="text"
-                                      value={q.explanation}
-                                      onChange={(e) => {
-                                        const nextExpl = e.target.value;
-                                        setQuestions((p) => p.map((itm) => (itm.id === q.id ? { ...itm, explanation: nextExpl } : itm)));
-                                      }}
-                                      className="w-full border border-slate-200 rounded p-1.5 bg-white"
-                                    />
-                                  </div>
-
-                                  <div className="flex justify-end space-x-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSaveQuestionEdit(q)}
-                                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold py-1.5 px-3 rounded"
-                                    >
-                                      Enregistrer
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                /* Standard Render Card */
-                                <div className="space-y-2">
-                                  <div className="text-sm font-semibold text-slate-905 leading-relaxed">
-                                    <MathRenderer text={q.statement} />
-                                  </div>
-
-                                  <div className="flex justify-between items-center text-[11px] font-medium text-slate-400 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                                    <span>Correct: <span className="text-slate-700 font-mono font-bold break-all"><MathRenderer text={q.correctAnswer} /></span></span>
-                                    <span>Valeur: <span className="text-indigo-600 font-mono font-bold">{q.points} pt{q.points > 1 ? "s" : ""}</span></span>
-                                  </div>
-
-                                  {q.explanation && (
-                                    <div className="text-[11px] bg-indigo-50/50 text-indigo-950 p-2.5 rounded-lg border border-indigo-100/60 leading-relaxed">
-                                      💡 <strong>Explication:</strong> <MathRenderer text={q.explanation} />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                    </div>
-
-                  </div>
-                  )}
-
-                  {teacherExamTab === 'analytics' && (() => {
-                    const examSubmissions = submissions.filter(s => s.examId === activeExam.id);
-                    const gradedSubmissions = examSubmissions.filter(s => s.score !== null);
-                    const examQuestions = questions.filter(q => q.type !== "description");
-                    const totalPoints = examQuestions.reduce((sum, q) => sum + (q.points || 1), 0);
-                    const normalizedScores = gradedSubmissions.map(s => (s.score / (totalPoints || 1)) * 20);
-                    const classAverage = normalizedScores.length > 0 ? parseFloat((normalizedScores.reduce((sum, score) => sum + score, 0) / normalizedScores.length).toFixed(1)) : 0;
-                    const maxScore = normalizedScores.length > 0 ? parseFloat(Math.max(...normalizedScores).toFixed(1)) : 0;
-                    const minScore = normalizedScores.length > 0 ? parseFloat(Math.min(...normalizedScores).toFixed(1)) : 0;
-                    const passRate = normalizedScores.length > 0 ? parseFloat(((normalizedScores.filter(s => s >= 10).length / normalizedScores.length) * 100).toFixed(1)) : 0;
-
-                    const ranges = [
-                      { name: "[0-5[", count: 0 },
-                      { name: "[5-10[", count: 0 },
-                      { name: "[10-12[", count: 0 },
-                      { name: "[12-14[", count: 0 },
-                      { name: "[14-16[", count: 0 },
-                      { name: "[16-18[", count: 0 },
-                      { name: "[18-20]", count: 0 }
-                    ];
-                    normalizedScores.forEach(score => {
-                      if (score < 5) ranges[0].count++;
-                      else if (score < 10) ranges[1].count++;
-                      else if (score < 12) ranges[2].count++;
-                      else if (score < 14) ranges[3].count++;
-                      else if (score < 16) ranges[4].count++;
-                      else if (score < 18) ranges[5].count++;
-                      else ranges[6].count++;
-                    });
-
-                    const questionSuccessData = questions.map((q, idx) => {
-                      if (q.type === "description") return null;
-                      let correctCount = 0;
-                      let totalAttempts = 0;
-
-                      examSubmissions.forEach(sub => {
-                        totalAttempts++;
-                        const studentAns = sub.answers[q.id];
-                        if (q.type === "essay") {
-                          const feed = sub.essayFeedbacks?.[q.id];
-                          if (feed && feed.score >= (q.points || 1) / 2) {
-                            correctCount++;
-                          }
-                        } else {
-                          let isCorrect = false;
-                          if (studentAns !== undefined && studentAns !== null) {
-                            if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
-                              isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
-                            } else if (q.type === "matching") {
-                              try {
-                                let matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
-                                let matches = 0;
-                                const opts = q.options || [];
-                                const targets = q.matchingTargets || [];
-                                opts.forEach((key: string, idxKey: number) => {
-                                  if (matchingMap && matchingMap[key] === targets[idxKey]) matches++;
-                                });
-                                if (opts.length > 0 && matches / opts.length >= 0.5) {
-                                  isCorrect = true;
-                                }
-                              } catch (_) {}
-                            }
-                          }
-                          if (isCorrect) correctCount++;
-                        }
-                      });
-
-                      const successRate = totalAttempts > 0 ? Math.round((correctCount / totalAttempts) * 100) : 0;
-                      return {
-                        id: q.id,
-                        label: `Q${idx + 1}`,
-                        statement: q.statement,
-                        theme: getQuestionTheme(q),
-                        successRate,
-                        type: q.type
-                      };
-                    }).filter(Boolean);
-
-                    const classThemeScores: Record<string, { obtained: number; total: number }> = {
-                      "Théorie & Concepts": { obtained: 0, total: 0 },
-                      "Logique & Diagnostic": { obtained: 0, total: 0 },
-                      "Appariement & Syntaxe": { obtained: 0, total: 0 },
-                      "Calculs & Analyse": { obtained: 0, total: 0 },
-                      "Démonstration & Rédaction": { obtained: 0, total: 0 }
-                    };
-                    examSubmissions.forEach(sub => {
-                      questions.forEach(q => {
-                        const theme = getQuestionTheme(q);
-                        if (classThemeScores[theme]) {
-                          classThemeScores[theme].total += q.points || 1;
-                          const studentAns = sub.answers[q.id];
-                          if (q.type === "essay") {
-                            const feed = sub.essayFeedbacks?.[q.id];
-                            if (feed && feed.score !== undefined) {
-                              classThemeScores[theme].obtained += feed.score;
-                            }
-                          } else if (q.type === "description") {
-                            // skip
-                          } else {
-                            let isCorrect = false;
-                            if (studentAns !== undefined && studentAns !== null) {
-                              if (q.type === "mcq" || q.type === "true_false" || q.type === "numerical" || q.type === "short_answer" || q.type === "cloze") {
-                                isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
-                              } else if (q.type === "matching") {
-                                try {
-                                  let matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
-                                  let matches = 0;
-                                  const opts = q.options || [];
-                                  const targets = q.matchingTargets || [];
-                                  opts.forEach((key: string, idxKey: number) => {
-                                    if (matchingMap && matchingMap[key] === targets[idxKey]) matches++;
-                                  });
-                                  if (opts.length > 0 && matches / opts.length >= 0.5) {
-                                    isCorrect = true;
-                                  }
-                                } catch (_) {}
-                              }
-                            }
-                            if (isCorrect) {
-                              classThemeScores[theme].obtained += q.points || 1;
-                            }
-                          }
-                        }
-                      });
-                    });
-
-                    const classThemesData = Object.keys(classThemeScores).map(theme => {
-                      const { obtained, total } = classThemeScores[theme];
-                      return {
-                        subject: theme,
-                        A: total > 0 ? Math.round((obtained / total) * 100) : 0,
-                        fullMark: 100
-                      };
-                    });
-
-                    return (
-                      <div className="space-y-8 mt-6 animate-fade-in">
-                        {/* Summary metrics row */}
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                          <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-indigo-100/80 dark:border-slate-700/80">
-                            <span className="text-[10px] font-mono font-bold text-indigo-500 dark:text-indigo-400 uppercase">MOYENNE DE CLASSE</span>
-                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{classAverage} <span className="text-sm font-normal text-slate-500 dark:text-slate-400">/ 20</span></div>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Moyenne des notes sur 20</p>
-                          </div>
-
-                          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-emerald-100/80 dark:border-slate-700/80">
-                            <span className="text-[10px] font-mono font-bold text-emerald-500 dark:text-emerald-400 uppercase">TAUX DE REUSSITE</span>
-                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{passRate}%</div>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">Moyenne &ge; 10/20</p>
-                          </div>
-
-                          <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-amber-100/80 dark:border-slate-700/80">
-                            <span className="text-[10px] font-mono font-bold text-amber-500 dark:text-amber-400 uppercase">NOTE MAX / MIN</span>
-                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{maxScore} <span className="text-xs text-slate-400 font-normal">/ {minScore}</span></div>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Notes extrêmes obtenues</p>
-                          </div>
-
-                          <div className="bg-gradient-to-br from-slate-50 to-slate-100/50 dark:from-slate-800 dark:to-slate-800/40 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
-                            <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-slate-400 uppercase">PARTICIPATION</span>
-                            <div className="text-3xl font-extrabold text-slate-800 dark:text-white mt-1">{examSubmissions.length}</div>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">{gradedSubmissions.length} copies corrigées</p>
-                          </div>
-                        </div>
-
-                        {/* Charts Grid */}
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                          {/* Distribution des notes */}
-                          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
-                            <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
-                              <span>📊 Distribution des notes</span>
-                            </h3>
-                            <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Répartition des étudiants par tranches de notes (normalisées sur 20)</p>
-                            <div className="h-64 w-full">
-                              {gradedSubmissions.length === 0 ? (
-                                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Aucune donnée disponible. Les étudiants doivent d'abord soumettre leurs examens.</div>
-                              ) : (
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart data={ranges}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                    <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                                    <YAxis stroke="#94a3b8" fontSize={11} allowDecimals={false} tickLine={false} />
-                                    <Tooltip cursor={{ fill: '#f8fafc' }} />
-                                    <Bar dataKey="count" fill="#4f46e5" radius={[4, 4, 0, 0]} name="Nombre d'étudiants" />
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Radar thématique classe */}
-                          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
-                            <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-1 flex items-center space-x-1.5">
-                              <span>🕸️ Profil de compétences de la classe</span>
-                            </h3>
-                            <p className="text-xs text-slate-400 dark:text-slate-400 mb-4">Taux de réussite moyen de la classe (%) par thématique d'évaluation</p>
-                            <div className="h-64 w-full">
-                              {gradedSubmissions.length === 0 ? (
-                                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Aucune donnée disponible</div>
-                              ) : (
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <RadarChart cx="50%" cy="50%" outerRadius="75%" data={classThemesData}>
-                                    <PolarGrid stroke="#e2e8f0" />
-                                    <PolarAngleAxis dataKey="subject" stroke="#64748b" fontSize={9} />
-                                    <PolarRadiusAxis angle={30} domain={[0, 100]} stroke="#cbd5e1" fontSize={8} />
-                                    <Radar name="Classe" dataKey="A" stroke="#4f46e5" fill="#818cf8" fillOpacity={0.3} />
-                                    <Tooltip />
-                                  </RadarChart>
-                                </ResponsiveContainer>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Analysis per question */}
-                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xs">
-                          <div className="flex justify-between items-center mb-4">
-                            <div>
-                              <h3 className="text-sm font-bold text-slate-800 dark:text-white">🔍 Taux de réussite par question</h3>
-                              <p className="text-xs text-slate-400 dark:text-slate-450">Pourcentage d'étudiants ayant validé chaque question de l'évaluation</p>
-                            </div>
-                          </div>
-
-                          {gradedSubmissions.length === 0 ? (
-                            <div className="py-8 text-center text-xs text-slate-400 italic">Aucune copie à analyser.</div>
-                          ) : (
-                            <div className="space-y-4">
-                              <div className="h-48 w-full">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart data={questionSuccessData} layout="vertical">
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                                    <XAxis type="number" domain={[0, 100]} stroke="#94a3b8" fontSize={11} tickFormatter={(v) => `${v}%`} tickLine={false} />
-                                    <YAxis type="category" dataKey="label" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                                    <Tooltip formatter={(v) => [`${v}%`, 'Taux de réussite']} />
-                                    <Bar dataKey="successRate" radius={[0, 4, 4, 0]} name="Taux de réussite">
-                                      {questionSuccessData.map((entry: any, index: number) => {
-                                        let color = '#10b981';
-                                        if (entry.successRate < 40) color = '#f43f5e';
-                                        else if (entry.successRate < 70) color = '#f59e0b';
-                                        return <Cell key={`cell-${index}`} fill={color} />;
-                                      })}
-                                    </Bar>
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-
-                              <div className="overflow-x-auto mt-4">
-                                <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300 border-collapse">
-                                  <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-850 uppercase tracking-wider text-[10px] font-bold text-slate-400">
-                                    <tr>
-                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Question</th>
-                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Thématique</th>
-                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850">Type</th>
-                                      <th className="px-4 py-2 border-r border-slate-100 dark:border-slate-850 text-center">Taux de Réussite</th>
-                                      <th className="px-4 py-2">Statut Didactique</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {questionSuccessData.map((item: any) => (
-                                      <tr key={item.id} className="border-b border-slate-100 dark:border-slate-850 hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
-                                        <td className="px-4 py-2.5 font-bold text-slate-800 dark:text-white border-r border-slate-100 dark:border-slate-850">{item.label}</td>
-                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-slate-500 dark:text-slate-400 font-medium">{item.theme}</td>
-                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-slate-500 dark:text-slate-400 font-mono text-[10px] uppercase">{item.type}</td>
-                                        <td className="px-4 py-2.5 border-r border-slate-100 dark:border-slate-850 text-center font-bold">
-                                          <span className={item.successRate < 40 ? "text-rose-600" : item.successRate < 70 ? "text-amber-600" : "text-emerald-600"}>
-                                            {item.successRate}%
-                                          </span>
-                                        </td>
-                                        <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400">
-                                          {item.successRate < 40 ? (
-                                            <span className="text-rose-600 font-medium">⚠️ À retravailler d'urgence (Mal compris)</span>
-                                          ) : item.successRate < 70 ? (
-                                            <span className="text-amber-600 font-medium">💡 Compréhension partielle (À consolider)</span>
-                                          ) : (
-                                            <span className="text-emerald-600 font-medium">✅ Compétence acquise par la classe</span>
-                                          )}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {teacherExamTab === 'monitoring' && (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs mt-6">
-                      <div className="flex justify-between items-center mb-6">
-                        <div>
-                          <h3 className="text-lg font-bold text-slate-800">Rapports d'E-Proctoring</h3>
-                          <p className="text-xs text-slate-500">Chronologie et scores de suspicion des étudiants</p>
-                        </div>
-                      </div>
-                      
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-sm text-slate-600 border-collapse">
-                          <thead className="text-xs text-slate-400 uppercase bg-slate-50 border-b border-slate-100">
-                            <tr>
-                              <th className="px-4 py-3 border-r border-slate-100">Étudiant</th>
-                              <th className="px-4 py-3 border-r border-slate-100 text-center">Score de Suspicion</th>
-                              <th className="px-4 py-3 border-r border-slate-100 text-center">Niveau de Risque</th>
-                              <th className="px-4 py-3">Détection IA & Alertes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {proctoringReports.length === 0 ? (
-                               <tr><td colSpan={4} className="text-center py-8 text-xs text-slate-400">Aucun rapport de surveillance généré. (Les étudiants doivent participer à l'examen)</td></tr>
-                            ) : (
-                               proctoringReports.map((report) => (
-                                 <tr key={report.studentId} className="border-b border-slate-50 hover:bg-slate-50 transition">
-                                   <td className="px-4 py-3 font-semibold text-slate-800 border-r border-slate-100">{submissions.find(s => s.studentId === report.studentId)?.studentEmail || "Étudiant Test"}</td>
-                                   <td className="px-4 py-3 text-center border-r border-slate-100 font-mono text-indigo-700 font-bold">{report.suspicionScore} / 100</td>
-                                   <td className="px-4 py-3 text-center border-r border-slate-100">
-                                      <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full ${
-                                        report.riskLevel === 'HIGH' ? 'bg-rose-100 text-rose-800' :
-                                        report.riskLevel === 'MEDIUM' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
-                                      }`}>
-                                        {report.riskLevel}
-                                      </span>
-                                   </td>
-                                   <td className="px-4 py-3 text-xs space-y-1">
-                                     {report.events.filter((e: any) => e.isSuspicious).slice(0, 3).map((e: any, i: number) => (
-                                        <div key={i} className="flex justify-between border-b border-dashed border-slate-200 pb-1">
-                                          <span className="text-slate-500 font-mono">{new Date(e.timestamp).toLocaleTimeString('fr-FR')}</span>
-                                          <span className="text-rose-600 font-semibold">{e.type}</span>
-                                        </div>
-                                     ))}
-                                     {report.events.filter((e: any) => e.isSuspicious).length > 3 && (
-                                        <div className="text-[10px] text-slate-400 font-bold italic pt-1">
-                                          + {report.events.filter((e: any) => e.isSuspicious).length - 3} événement(s) suspect(s) supplémentaire(s).
-                                        </div>
-                                     )}
-                                     {report.events.filter((e: any) => e.isSuspicious).length === 0 && (
-                                       <span className="text-emerald-500 text-[10px] font-bold uppercase">Aucune anomalie détectée</span>
-                                     )}
-                                   </td>
-                                 </tr>
-                               ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
                     </div>
                   )}
-
                 </div>
               )}
-
             </div>
           )}
-
-        </main>
-      )}
-
-      {/* Styled Footer */}
-      <footer className="mt-auto bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 py-6 text-center text-xs text-slate-400 print:hidden">
-        <div className="max-w-7xl mx-auto px-4">
-          <p>© 2026 EduQuiz AI • Outil de création et conversion pédagogique pour plateformes Moodle LMS.</p>
-          <p className="text-[9px] font-mono mt-1 text-slate-300">Intra-Platform Sandboxed Run</p>
-        </div>
-      </footer>
-
-      {/* PROFESSIONAL PRINTABLE REPORT - NOT VISIBLE UNTIL PRINT ACTION */}
-      {printSubmission && (
-        <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto print:absolute print:inset-0 print:bg-white print:text-black print:p-0 print:m-0 print:z-50">
-          <div className="bg-white dark:bg-slate-950 w-full max-w-4xl rounded-3xl shadow-2xl p-6 md:p-8 space-y-6 print:shadow-none print:p-0 print:rounded-none">
-            {/* Header Control banner for Screen */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 dark:border-slate-850 pb-4 gap-3 print:hidden">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">Aperçu du rapport académique professionnel</h3>
-                <p className="text-xs text-slate-500">Prêt pour l'impression physique ou l'enregistrement vectoriel PDF.</p>
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow-xs hover:shadow-md flex items-center space-x-1.5 cursor-pointer"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Imprimer / Exporter en PDF</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPrintSubmission(null)}
-                  className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-705 text-slate-707 dark:text-slate-300 text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
-                >
-                  Fermer
-                </button>
-              </div>
-            </div>
-
-            {/* THE ACTUAL ACADEMIC SHEET */}
-            <div className="space-y-6 font-sans text-slate-850 dark:text-slate-100">
-              {/* Official Academic Title Tag */}
-              <div className="border-b-4 border-slate-950 dark:border-white pb-4 flex justify-between items-end">
-                <div>
-                  <h1 className="text-xl font-extrabold uppercase tracking-tight text-slate-950 dark:text-white">EDUGEN ACADEMIC INSIGHT</h1>
-                  <p className="text-xs text-slate-500 font-mono">RAPPORT INDIVIDUEL D'ÉVALUATION ET DE NOTATION</p>
-                </div>
-                <div className="text-right text-xs">
-                  <p className="font-bold text-slate-950 dark:text-white">EduQuiz AI Engine</p>
-                  <p className="text-[10px] text-slate-400 font-mono">ID: {printSubmission.submission.id}</p>
-                </div>
-              </div>
-
-              {/* Course Meta Grid */}
-              <div className="grid grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-850 p-4 rounded-xl text-xs font-sans text-slate-800 dark:text-slate-300">
-                <div>
-                  <p className="text-slate-400 font-bold uppercase text-[9px] tracking-wider mb-0.5">EXAMEN / SUPPORT :</p>
-                  <p className="font-extrabold text-slate-900 dark:text-white text-sm">{printSubmission.exam?.title || "Examen Académique"}</p>
-                  <p className="text-[11px] text-slate-500 mt-1">Cours : {printSubmission.course?.title || "Matière Active"}</p>
-                </div>
-                <div>
-                  <p className="text-slate-400 font-bold uppercase text-[9px] tracking-wider mb-0.5">CANDIDAT ÉTUDIANT :</p>
-                  <p className="font-extrabold text-slate-900 dark:text-white text-sm">{printSubmission.submission.studentEmail}</p>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Date de rendu : {new Date(printSubmission.submission.timestamp).toLocaleString("fr-FR")}
-                  </p>
-                </div>
-              </div>
-
-              {/* Total points card */}
-              <div className="flex items-center justify-between border border-slate-200 dark:border-slate-800 p-4 rounded-xl bg-slate-50/50 dark:bg-slate-900/30">
-                <div>
-                  <h4 className="font-bold text-slate-900 dark:text-white text-xs">SCORE GLOBAL DE SYNTHÈSE</h4>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500">Calculé intégrant les choix multiples et auto-évaluations</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-mono text-xl font-black text-indigo-700 dark:text-indigo-400">
-                    {printSubmission.submission.score !== null ? `${printSubmission.submission.score}` : "Non finalisé"} Pts
-                  </p>
-                  <p className="text-[9px] text-slate-400 font-bold uppercase">ÉCHELLE GÉNÉRALE</p>
-                </div>
-              </div>
-
-              {/* Questions Listings */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-extrabold text-slate-950 dark:text-white tracking-wider uppercase border-b border-slate-200 dark:border-slate-800 pb-1">Détail des Questions & Feedbacks IA</h3>
-                
-                {printSubmission.questions.map((q: any, qIndex: number) => {
-                  const ansValue = printSubmission.submission.answers[q.id];
-                  const isMcqCorrect = q.correctAnswer.trim().toLowerCase() === String(ansValue || "").trim().toLowerCase();
-                  
-                  // Extract score and comment for essay or other
-                  let scoreGiven = 0;
-                  let commentGiven = "";
-                  
-                  if (q.type === "essay") {
-                    scoreGiven = printSubmission.submission.essayFeedbacks?.[q.id]?.score || 0;
-                    commentGiven = printSubmission.submission.essayFeedbacks?.[q.id]?.comment || "";
-                  } else {
-                    scoreGiven = isMcqCorrect ? q.points : 0;
-                  }
-
-                  return (
-                    <div key={q.id} className="p-4 border border-slate-150 dark:border-slate-800 rounded-xl space-y-3 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-100 break-inside-avoid shadow-xs">
-                      <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-lg border border-slate-100 dark:border-slate-850 font-mono text-[10px]">
-                        <span className="font-bold text-slate-700 dark:text-slate-350 select-none">QUESTION {qIndex + 1} ({q.type.toUpperCase()})</span>
-                        <span className="font-extrabold text-slate-950 dark:text-white">
-                          NOTE : {scoreGiven} / {q.points} Points
-                        </span>
-                      </div>
-
-                      {/* Statement */}
-                      <div className="font-semibold text-slate-900 dark:text-white leading-relaxed pl-1">
-                        <MathRenderer text={q.statement} />
-                      </div>
-
-                      {/* Submitted Answer Row */}
-                      <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-150 dark:border-slate-850 rounded-lg text-[11px]">
-                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5 font-mono">Réponse rédigée par l'étudiant :</p>
-                        <p className="text-slate-950 dark:text-slate-100 font-medium whitespace-pre-wrap break-all font-sans">
-                          {typeof ansValue === "object" ? JSON.stringify(ansValue) : ansValue || "Aucune réponse fournie."}
-                        </p>
-                      </div>
-
-                      {/* AI evaluation feedback detail */}
-                      <div className="pl-3 border-l-2 border-indigo-500 py-1 space-y-1">
-                        <p className="text-[10px] text-indigo-700 dark:text-indigo-400 font-extrabold uppercase font-mono flex items-center space-x-1">
-                          <span>🎯 Évaluation & Correction :</span>
-                        </p>
-                        {q.type !== "essay" ? (
-                          <div className="text-[11px] leading-relaxed font-sans text-slate-800 dark:text-slate-200">
-                            {isMcqCorrect ? (
-                              <p className="text-emerald-700 dark:text-emerald-400 font-bold">✓ Réponse correcte. Barème automatique appliqué (+{q.points} pts).</p>
-                            ) : (
-                              <p className="text-rose-700 dark:text-rose-450 font-bold font-sans">✗ Réponse incorrecte. La réponse attendue était : {q.correctAnswer}.</p>
-                            )}
-                            {q.explanation && (
-                              <p className="text-slate-450 dark:text-slate-500 mt-1 font-sans italic">Explication : {q.explanation}</p>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="text-[11px] leading-relaxed space-y-1 text-slate-800 dark:text-slate-200">
-                            {printSubmission.submission.essayFeedbacks?.[q.id]?.similarityPct !== undefined && (
-                              <p className="text-slate-700 dark:text-slate-300 font-bold">
-                                Similitude de Levenshtein avec corrigé : <span className="text-indigo-600 dark:text-indigo-400 font-extrabold font-mono">{printSubmission.submission.essayFeedbacks[q.id].similarityPct}%</span>
-                              </p>
-                            )}
-                            {commentGiven ? (
-                              <p className="text-slate-800 dark:text-slate-100 font-semibold bg-slate-50 dark:bg-slate-950 p-2 rounded-lg border border-slate-100 dark:border-slate-850 italic">
-                                "{commentGiven}"
-                              </p>
-                            ) : (
-                              <p className="text-slate-400 italic">Aucun commentaire rédigé pour le moment.</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Signature Footer */}
-              <div className="pt-8 border-t border-dashed border-slate-300 flex justify-between items-center text-[10px] text-slate-400 font-mono">
-                <span>Rapport EduQuiz Academic Generator</span>
-                <span className="text-right">Sceau d'authenticité - Plateforme Externe</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* EXAM SHARE DIRECT LINK DIALOG MODAL */}
       <AnimatePresence>
@@ -5241,7 +3587,7 @@ export default function App() {
               <hr className="border-slate-100 dark:border-slate-850" />
 
               <div className="space-y-3">
-                <p className="text-xs font-semibold text-slate-755 dark:text-slate-250 leading-relaxed">
+                <p className="text-xs font-semibold text-slate-755 dark:text-slate-200 leading-relaxed">
                   Fournissez ce code direct-link d'inscription unique aux étudiants pour qu'ils s'enregistrent instantanément et soient redirigés vers ce devoir :
                 </p>
 
@@ -5267,7 +3613,7 @@ export default function App() {
                   <p className="font-bold uppercase text-slate-500 mb-0.5">💡 Comment l'utiliser ?</p>
                   Les étudiants n'ont qu'à copier-coller ce code complet dans la case <span className="font-bold">Rejoindre un cours</span> de leur tableau de bord élève. Notre infrastructure se chargera du reste !
                 </div>
-              </div>
+                </div>
 
               <div className="pt-2 flex justify-end">
                 <button
@@ -5382,211 +3728,113 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-
-      {/* FLOATING AI ASSISTANT CHAT WIDGET */}
-      {user && (
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end space-y-3 print:hidden">
-          {/* Chat bubble overlay */}
-          <AnimatePresence>
-            {chatOpen && (
-              <motion.div
-                initial={{ opacity: 0, y: 30, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 30, scale: 0.95 }}
-                className="w-80 sm:w-96 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-850 shadow-2xl flex flex-col h-[460px] overflow-hidden"
-              >
-                {/* Header widget */}
-                <div className="bg-indigo-600 dark:bg-indigo-950 p-4 text-white flex justify-between items-center shrink-0">
-                  <div className="flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse animate-duration-1000" />
-                    <div>
-                      <h4 className="text-xs font-bold font-sans">
-                        {user.role === "student" ? "Tuteur Personnel IA EduQuiz" : "Assistant Académique EduQuiz"}
-                      </h4>
-                      <p className="text-[10px] text-indigo-200">En ligne • Support et tutorat actif</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setChatOpen(false)}
-                    className="text-white hover:bg-white/15 p-1 rounded-full transition cursor-pointer"
-                  >
-                    <X className="w-4.5 h-4.5" />
-                  </button>
-                </div>
- 
-                {/* Messages stream */}
-                <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50 dark:bg-slate-950 font-sans">
-                  {chatMessages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[85%] rounded-2xl px-3 py-2.5 text-xs leading-relaxed ${
-                          msg.role === "user"
-                            ? "bg-indigo-600 text-white rounded-br-none"
-                            : "bg-white dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none shadow-xs"
-                        }`}
-                      >
-                        <p className="whitespace-pre-line font-medium font-sans">{msg.content}</p>
-                      </div>
-                    </div>
-                  ))}
-                  {chatLoading && (
-                    <div className="flex justify-start">
-                      <div className="bg-white dark:bg-slate-900 border border-slate-200/50 dark:border-slate-850 text-slate-400 rounded-2xl px-3 py-2.5 text-xs flex items-center space-x-2 rounded-bl-none">
-                        <span className="animate-bounce">●</span>
-                        <span className="animate-bounce delay-100">●</span>
-                        <span className="animate-bounce delay-200">●</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
- 
-                {/* Form fields */}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    sendChatMessage();
-                  }}
-                  className="p-3 border-t border-slate-100 dark:border-slate-800 flex items-center space-x-2 shrink-0 bg-white dark:bg-slate-900"
-                >
-                  <input
-                    type="text"
-                    required
-                    placeholder={
-                      user.role === "student"
-                        ? "Posez une question de cours ou d'exercices à l'IA..."
-                        : "Posez vos questions de structure d'examen..."
-                    }
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    className="text-xs px-3 py-2 border border-slate-200 dark:border-slate-705 rounded-xl flex-1 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-white focus:outline-hidden font-sans"
-                  />
-                  <button
-                    type="submit"
-                    disabled={chatLoading}
-                    className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer disabled:opacity-40 shrink-0 flex items-center justify-center font-bold"
-                    title="Envoyer"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                  </button>
-                </form>
-              </motion.div>
-            )}
-          </AnimatePresence>
- 
-          {/* Sparkles toggle button */}
-          <button
-            type="button"
-            onClick={() => setChatOpen(!chatOpen)}
-            className="p-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-2xl hover:scale-105 transition duration-200 flex items-center justify-center cursor-pointer z-50 shrink-0 border border-indigo-500/20"
-            title="Consulter l'IA EduQuiz"
-          >
-            <MessageSquare className="w-5 h-5" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Student views courses exams list view internal helper
-interface StudentExamsViewProps {
-  courses: Course[];
-  studentSubmissions: any[];
-  onStartExam: (examObj: Exam) => void;
-}
-
-function StudentExamsListView({ courses, studentSubmissions, onStartExam }: StudentExamsViewProps) {
-  const [exams, setExams] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchAllEnrolledExams = async () => {
-      try {
-        const list: any[] = [];
-        for (const crs of courses) {
-          const res = await fetch(`/api/courses/${crs.id}/exams`);
-          if (res.ok) {
-            const data = await res.json();
-            // Filter only published exams
-            const publishedOnly = data.filter((e: any) => e.status === "published");
-            publishedOnly.forEach((exObj: any) => {
-              list.push({
-                ...exObj,
-                courseTitle: crs.title,
-              });
-            });
-          }
-        }
-        setExams(list);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAllEnrolledExams();
-  }, [courses]);
-
-  if (loading) return <p className="text-xs text-slate-400 text-center py-4">Recherche des devoirs en cours...</p>;
-
-  if (exams.length === 0) {
-    return (
-      <div className="text-center py-8 text-slate-400">
-        <p className="text-xs">Aucun examen n'est publié actuellement dans vos matières respectives.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      {exams.map((ex) => {
-        const alreadyTaken = studentSubmissions.some((sub) => sub.examId === ex.id);
-        const subDetails = studentSubmissions.find((sub) => sub.examId === ex.id);
-
-        return (
-          <div
-            key={ex.id}
-            className="p-4 rounded-xl border border-slate-150 bg-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:border-indigo-100"
-          >
-            <div>
-              <span className="text-[9px] bg-slate-200 text-slate-600 font-mono font-bold tracking-wider px-2 py-0.5 rounded">
-                {ex.courseTitle}
-              </span>
-              <h4 className="font-bold text-slate-900 mt-1 text-sm">{ex.title}</h4>
-              <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                Durée: {ex.duration} min • Début programmé: {new Date(ex.startDate).toLocaleString("fr-FR")}
-              </p>
-            </div>
-
-            <div className="shrink-0">
-              {alreadyTaken ? (
-                <div className="text-right">
-                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-100 px-3 py-1 rounded-xl text-xs font-semibold block">
-                    ✓ Devoir Rendu
-                  </span>
-                  {subDetails && subDetails.score !== null && (
-                    <span className="text-[11px] font-mono text-slate-500 mt-1 block">
-                      Note de synthèse: {subDetails.score} pts
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onStartExam(ex)}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-1.5 px-3.5 rounded-lg transition"
-                >
-                  Démarrer le test
-                </button>
-              )}
-            </div>
           </div>
-        );
-      })}
+
+        <div className="fixed bottom-6 right-6 flex flex-col items-end space-y-3 z-50">
+          <>
+            {/* Chat bubble overlay */}
+            <AnimatePresence>
+              {chatOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 30, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 30, scale: 0.95 }}
+                  className="w-80 sm:w-96 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-850 shadow-2xl flex flex-col h-[460px] overflow-hidden"
+                >
+                  {/* Header widget */}
+                  <div className="bg-indigo-600 dark:bg-indigo-950 p-4 text-white flex justify-between items-center shrink-0">
+                    <div className="flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse animate-duration-1000" />
+                      <div>
+                        <h4 className="text-xs font-bold font-sans">
+                          {user.role === "student" ? "Tuteur Personnel IA EduQuiz" : "Assistant Académique EduQuiz"}
+                        </h4>
+                        <p className="text-[10px] text-indigo-200">En ligne • Support et tutorat actif</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setChatOpen(false)}
+                      className="text-white hover:bg-white/15 p-1 rounded-full transition cursor-pointer"
+                    >
+                      <X className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+
+                  {/* Messages stream */}
+                  <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50 dark:bg-slate-950 font-sans">
+                    {chatMessages.map((msg, i) => (
+                      <div
+                        key={i}
+                        className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                      >
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3 py-2.5 text-xs leading-relaxed ${
+                            msg.role === "user"
+                              ? "bg-indigo-600 text-white rounded-br-none"
+                              : "bg-white dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none shadow-xs"
+                          }`}
+                        >
+                          <p className="whitespace-pre-line font-medium font-sans">{msg.content}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {chatLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-white dark:bg-slate-900 border border-slate-200/50 dark:border-slate-850 text-slate-400 rounded-2xl px-3 py-2.5 text-xs flex items-center space-x-2 rounded-bl-none">
+                          <span className="animate-bounce">●</span>
+                          <span className="animate-bounce delay-100">●</span>
+                          <span className="animate-bounce delay-200">●</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Form fields */}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      sendChatMessage();
+                    }}
+                    className="p-3 border-t border-slate-100 dark:border-slate-800 flex items-center space-x-2 shrink-0 bg-white dark:bg-slate-900"
+                  >
+                    <input
+                      type="text"
+                      required
+                      placeholder={
+                        user.role === "student"
+                          ? "Posez une question de cours ou d'exercices à l'IA..."
+                          : "Posez vos questions de structure d'examen..."
+                      }
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      className="text-xs px-3 py-2 border border-slate-200 dark:border-slate-705 rounded-xl flex-1 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-white focus:outline-hidden font-sans"
+                    />
+                    <button
+                      type="submit"
+                      disabled={chatLoading}
+                      className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer disabled:opacity-40 shrink-0 flex items-center justify-center font-bold"
+                      title="Envoyer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Sparkles toggle button */}
+            <button
+              type="button"
+              onClick={() => setChatOpen(!chatOpen)}
+              className="p-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-2xl hover:scale-105 transition duration-200 flex items-center justify-center cursor-pointer z-50 shrink-0 border border-indigo-500/20"
+              title="Consulter l IA EduQuiz"
+            >
+              <MessageSquare className="w-5 h-5" />
+            </button>
+          </>
+        </div>
+      </div>
     </div>
   );
 }

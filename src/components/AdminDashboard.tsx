@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { Shield, Trash2, Users, BookOpen, FileText } from 'lucide-react';
+import { Shield, Trash2, Users, BookOpen, FileText, Sun, Moon } from 'lucide-react';
 import { getApiUrl } from '../firebase';
 
 interface AdminDashboardProps {
   user: User;
   onLogout: () => void;
+  darkMode?: boolean;
+  onToggleDarkMode?: () => void;
 }
 
-export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
+export function AdminDashboard({ user, onLogout, darkMode, onToggleDarkMode }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'exams'>('users');
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,27 +54,37 @@ export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white px-6 py-4 border-b border-gray-200 flex justify-between items-center sticky top-0 z-10 shadow-sm">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col font-sans transition-colors">
+      <header className="bg-white dark:bg-slate-900 px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center sticky top-0 z-10 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-purple-100 text-purple-700 rounded-lg">
+          <div className="p-2 bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 rounded-lg">
             <Shield className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Administration</h1>
-            <p className="text-sm text-gray-500">Superviseur EduQuiz</p>
+            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Administration</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Superviseur EduQuiz</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex flex-col items-end mr-4">
-            <span className="text-sm font-medium text-gray-900">{user.email}</span>
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full mt-1 border border-gray-200">
+          <div className="flex flex-col items-end mr-2">
+            <span className="text-sm font-medium text-slate-900 dark:text-slate-200">{user.email}</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full mt-1 border border-slate-200 dark:border-slate-700">
               Administrateur
             </span>
           </div>
+          {onToggleDarkMode && (
+            <button
+              type="button"
+              onClick={onToggleDarkMode}
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
+              title={darkMode ? "Activer le mode clair" : "Activer le mode sombre"}
+            >
+              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+          )}
           <button
             onClick={onLogout}
-            className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+            className="px-4 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg transition-colors border border-slate-200 dark:border-slate-700 cursor-pointer"
           >
             Déconnexion
           </button>

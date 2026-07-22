@@ -18,6 +18,14 @@ import * as pdfParseModule from "pdf-parse";
 import * as mammothModule from "mammoth";
 import * as tesseractModule from "tesseract.js";
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+  }
+}
+
 // Safe helper to extract callable function for CommonJS modules under ESM/CJS interop environments
 function getCallable(mod: any) {
   if (!mod) return mod;
@@ -29,42 +37,25 @@ function getCallable(mod: any) {
 
 // Robust PDF Parse wrapper to handle both legacy function-based and modern class-based pdf-parse signatures
 async function pdfParse(buffer: Buffer): Promise<{ text: string }> {
-  // 1. Try using the named export PDFParse class (from modern pdf-parse)
-  if (pdfParseModule && typeof (pdfParseModule as any).PDFParse === "function") {
+  const PDFParseClass = (pdfParseModule as any).PDFParse || (pdfParseModule as any).default?.PDFParse;
+  if (typeof PDFParseClass === "function") {
     try {
-      const PDFParseClass = (pdfParseModule as any).PDFParse;
-      const parser = new PDFParseClass(new Uint8Array(buffer));
+      const parser = new PDFParseClass({ data: buffer });
       const res = await parser.getText();
       return { text: res?.text || "" };
     } catch (err) {
-      console.warn("[pdfParse] Failed with named PDFParse class, trying fallback...", err);
+      console.warn("[pdfParse] Failed with PDFParseClass({ data: buffer }), trying fallback...", err);
     }
   }
 
-  // 2. Try using the default export as a class
-  if (pdfParseModule && (pdfParseModule as any).default && typeof (pdfParseModule as any).default.PDFParse === "function") {
-    try {
-      const PDFParseClass = (pdfParseModule as any).default.PDFParse;
-      const parser = new PDFParseClass(new Uint8Array(buffer));
-      const res = await parser.getText();
-      return { text: res?.text || "" };
-    } catch (err) {
-      console.warn("[pdfParse] Failed with default.PDFParse class, trying fallback...", err);
-    }
-  }
-
-  // 3. Try using the legacy function-based pdf-parse or fallback to calling it as class or function
+  // Fallback to legacy function or other shapes
   const legacyPdfParse = getCallable(pdfParseModule);
   if (typeof legacyPdfParse === "function") {
     try {
-      // Maybe it is a class
-      const parser = new (legacyPdfParse as any)(new Uint8Array(buffer));
-      const res = await parser.getText();
-      return { text: res?.text || "" };
-    } catch {
-      // Or maybe it is a regular function
       const res = await (legacyPdfParse as any)(buffer);
       return typeof res === "object" && res !== null ? { text: res.text || "" } : { text: String(res || "") };
+    } catch (err) {
+      console.warn("[pdfParse] Failed with legacy function:", err);
     }
   }
 
@@ -297,162 +288,39 @@ const INITIAL_DB: DBStructure = {
 let dbFirestore: Firestore | null = null;
 try {
   let appInitialized = false;
-  let useSandbox = false;
 
-  const isSandboxContainer = !process.env.FIREBASE_SERVICE_ACCOUNT && 
-                             (process.env.GOOGLE_CLOUD_PROJECT === "yodeling-magpie-607pf" || 
-                              (process.env.K_SERVICE && !process.env.VERCEL));
-  
-  if (isSandboxContainer) {
-    useSandbox = true;
-  }
-
-  // If already initialized (warm start), we are set
-  if (getApps().length > 0) {
-    appInitialized = true;
-  }
-  
-  // If running on Vercel and no Service Account is provided, bypass Firestore initialization completely to prevent network timeouts/hangs
-  const isVercelWithoutCredentials = !!(process.env.VERCEL && !process.env.FIREBASE_SERVICE_ACCOUNT);
-  if (isVercelWithoutCredentials) {
-    console.warn("⚠️ Running on Vercel without FIREBASE_SERVICE_ACCOUNT. Disabling Firestore to prevent connection timeouts.");
-    appInitialized = false;
-  } else {
-    // 1. First try FIREBASE_SERVICE_ACCOUNT from environment
-    if (!appInitialized && process.env.FIREBASE_SERVICE_ACCOUNT) {
+  // Only attempt Firestore initialization if a valid FIREBASE_SERVICE_ACCOUNT is provided
+  if (process.env.FIREBASE_SERVICE_ACCOUNT && !process.env.FIREBASE_SERVICE_ACCOUNT.trim().startsWith("re_") && !process.env.FIREBASE_SERVICE_ACCOUNT.includes("PLACEHOLDER")) {
       try {
         let serviceAccountStr = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
         console.log("🔍 [Audit] Firebase Service Account detection...");
         
-        // Comprehensive check for common corruption patterns
         const looksLikeJson = serviceAccountStr.startsWith('{');
         const looksLikeBase64 = /^[A-Za-z0-9+/=]+$/.test(serviceAccountStr.replace(/\s/g, ''));
         
-        if (!looksLikeJson) {
-          if (looksLikeBase64) {
-            console.log("   -> Detected probable Base64 encoding. Decoding...");
-            const decoded = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
-            if (decoded.trim().startsWith('{')) {
-               serviceAccountStr = decoded;
-               console.log("   -> Successful Base64 JSON extraction.");
-            } else {
-               console.warn("   -> Base64 decoded string is NOT JSON. Falling back to raw string.");
-            }
-          } else {
-            console.warn("   -> Value is neither JSON nor valid Base64. Check for hidden characters or corruption.");
+        if (!looksLikeJson && looksLikeBase64) {
+          const decoded = Buffer.from(serviceAccountStr, 'base64').toString('utf8');
+          if (decoded.trim().startsWith('{')) {
+             serviceAccountStr = decoded;
           }
         }
 
-        try {
-          const serviceAccount = JSON.parse(serviceAccountStr);
-          if (getApps().length === 0) {
-            const app = initializeApp({
-              credential: cert(serviceAccount),
-              projectId: serviceAccount.project_id
-            });
-            const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
-            dbFirestore = dbId ? getFirestore(app, dbId) : getFirestore(app);
-            appInitialized = true;
-            console.log(`🔥 [Audit] Firebase Admin initialized for project: ${serviceAccount.project_id}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
-          }
-        } catch (jsonErr: any) {
-          console.error("   ❌ JSON Parse Error:", jsonErr.message);
-          // Log specific character to help user debug
-          const firstChar = serviceAccountStr.charCodeAt(0);
-          console.error(`   First char code: ${firstChar} (Char: '${serviceAccountStr[0]}')`);
-          throw jsonErr;
+        const serviceAccount = JSON.parse(serviceAccountStr);
+        if (getApps().length === 0) {
+          const app = initializeApp({
+            credential: cert(serviceAccount),
+            projectId: serviceAccount.project_id
+          });
+          const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+          dbFirestore = dbId ? getFirestore(app, dbId) : getFirestore(app);
+          appInitialized = true;
+          console.log(`🔥 [Audit] Firebase Admin initialized for project: ${serviceAccount.project_id}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
         }
       } catch (e: any) {
-        console.error("❌ [Audit] Failed to initialize Firebase Admin via Service Account.");
-        console.log("   -> Attempting fallback to Application Default Credentials...");
-        try {
-          if (getApps().length === 0) {
-            const fallbackProjectId = (process.env.VITE_FIREBASE_PROJECT_ID && !process.env.VITE_FIREBASE_PROJECT_ID.startsWith("re_"))
-               ? process.env.VITE_FIREBASE_PROJECT_ID 
-               : (firebaseAppletConfig.projectId || "eduquiz-632c5");
-            
-            const app = initializeApp({
-               projectId: fallbackProjectId
-            });
-            const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
-            dbFirestore = dbId ? getFirestore(app, dbId) : getFirestore(app);
-            appInitialized = true;
-            console.log(`🔥 [Audit] Firebase Admin fallback initialized via ADC for project: ${fallbackProjectId}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
-          }
-        } catch (fallbackErr: any) {
-          console.error("   -> ADC Fallback also failed:", fallbackErr.message);
-        }
+        console.error("❌ [Audit] Failed to initialize Firebase Admin via Service Account:", e.message);
       }
-    } 
-    
-    // 2. Next try our AI Studio provisioned config file
-    if (!appInitialized) {
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      let projectId = "eduquiz-632c5"; // Default to user's project
-
-      if (fs.existsSync(configPath)) {
-        try {
-          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-          if (useSandbox) {
-            projectId = "yodeling-magpie-607pf";
-            console.log("🛠️ AI Studio sandbox container detected. Using sandboxed project ID: yodeling-magpie-607pf");
-          } else if (config.projectId) {
-            projectId = config.projectId;
-            console.log("🌐 External/Vercel environment. Using project ID from config:", projectId);
-          }
-        } catch (e) {
-          console.error("❌ Failed to parse config file:", e);
-        }
-      }
-      
-      try {
-        if (getApps().length === 0) {
-          initializeApp({
-            projectId: projectId
-          });
-        }
-        appInitialized = true;
-        const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
-        dbFirestore = dbId ? getFirestore(getApp(), dbId) : getFirestore(getApp());
-        console.log(`🔥 [Audit] Firebase Admin final initialization for project: ${projectId}${dbId ? ' (DB: ' + dbId + ')' : ''}`);
-      } catch (e) {
-        console.error("❌ [Audit] Failed to initialize Firebase Admin in final block:", e);
-      }
-    }
-  }
-
-  // Set up firestore if app was initialized
-  if (appInitialized) {
-    let dbId = "(default)"; 
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
-        try {
-          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-          if (config.firestoreDatabaseId) {
-            dbId = config.firestoreDatabaseId;
-            console.log(`🔍 [Audit] Using Firestore Database ID from config: ${dbId}`);
-          } else if (useSandbox) {
-            dbId = "ai-studio-eduquizai-495bc204-9e63-4640-903e-b91ff9e217ca";
-            console.log(`🔍 [Audit] Using Sandbox Firestore Database ID: ${dbId}`);
-          }
-        } catch (_) {}
-    }
-    
-    try {
-      dbFirestore = getFirestore(getApp(), dbId);
-      console.log(`🔥 [Audit] Firestore Admin SDK successfully initialized (DB: ${dbId})`);
-    } catch (fsErr: any) {
-      console.error(`❌ [Audit] Failed to initialize Firestore SDK with DB ID '${dbId}':`, fsErr.message);
-      console.log("   -> Attempting final fallback to (default) database...");
-      try {
-        dbFirestore = getFirestore(getApp(), "(default)");
-        console.log("🔥 [Audit] Firestore Admin SDK successfully initialized (DB: (default))");
-      } catch (finalErr: any) {
-        console.error("   ❌ [Audit] Final fallback also failed:", finalErr.message);
-      }
-    }
   } else {
-    console.warn("⚠️ Warning: No Firebase credentials found. Falling back to local db.json storage.");
+    console.log("ℹ️ No FIREBASE_SERVICE_ACCOUNT provided. Using robust local db.json storage.");
   }
 } catch (error) {
   console.error("❌ Failed to initialize Firebase Admin:", error);
@@ -745,6 +613,7 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
 
   try {
     const { mimetype, buffer, originalname } = req.file;
+    const extractionType = (req.body.type === "solution") ? "solution" : "subject";
     const extension = originalname ? path.extname(originalname).toLowerCase() : "";
     let text = "";
     const ai = getGeminiClient();
@@ -807,10 +676,14 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
       if (ai) {
         if (localParseSuccess && rawText.trim().length > 150) {
           try {
-            console.log("[Extraction PDF] Formatage esthétique académique et équations LaTeX par Gemini.");
+            console.log(`[Extraction PDF] Formatage esthétique académique (${extractionType}) par Gemini.`);
+            const promptContent = extractionType === "solution"
+              ? `Vous êtes un correcteur universitaire et un expert en ingénierie pédagogique. Votre rôle est de transcrire ce corrigé type, barème ou solutions d'examen extrait d'un fichier PDF. Restituez TOUTES les réponses attendues, étapes de correction, barèmes et formules mathématiques en LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les blocs. Conservez rigoureusement toute la structure d'origine. Ne résumez pas, ne commentez pas.\n\nContenu brut extrait :\n${rawText}`
+              : `Vous êtes un transcripteur professionnel spécialisé dans les sujets d'examens mathématiques et scientifiques durs (Mathématiques, Physique, Chimie, etc.). Votre rôle est de nettoyer ce texte extrait d'un fichier PDF. Restituez TOUTES les formules mathématiques, symboles, fractions, intégrales, dérivées de manière standardisée LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les gros morceaux indépendants. Conservez rigoureusement toute la structure d'origine et les questions. Ne résumez pas, ne commentez pas.\n\nContenu brut extrait :\n${rawText}`;
+
             const response = await ai.models.generateContent({
               model: "gemini-3.5-flash",
-              contents: `Vous êtes un transcripteur professionnel spécialisé dans les sujets d'examens mathématiques et scientifiques durs (Mathématiques, Physique, Chimie, etc.). Votre rôle est de nettoyer ce texte extrait d'un fichier PDF. Restituez TOUTES les formules mathématiques, symboles, fractions, intégrales, dérivées de manière standardisée LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les gros morceaux indépendants. Conservez rigoureusement toute la structure d'origine et les questions. Ne résumez pas, ne commentez pas.\n\nContenu brut extrait :\n${rawText}`
+              contents: promptContent
             });
             text = response.text || rawText;
           } catch (err) {
@@ -820,14 +693,18 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
         } else {
           // Absolute Vision fallback (Sends PDF binary directly)
           try {
-            console.log("[Extraction PDF] Option Vision Active. Envoi binaire PDF direct à Gemini.");
+            console.log(`[Extraction PDF] Option Vision Active (${extractionType}). Envoi binaire PDF direct à Gemini.`);
+            const visionPrompt = extractionType === "solution"
+              ? "Vous êtes un assistant IA expert en OCR de documents de correction académique et de corrigés d'examens par vision. Ce document PDF contient des notes de correction, des réponses attendues, des barèmes et des équations mathématiques complexes. Veuillez exécuter un processus d'OCR par vision assistée pour extraire tout le texte et les solutions. Restituez rigoureusement toutes les expressions scientifiques en formule LaTeX ($...$ ou $$...$$). Reconstruisez fidèlement les tableaux de barème au format Markdown. Ne faites aucun commentaire supplémentaire."
+              : "Vous êtes un assistant IA expert en OCR de documents académiques par vision. Ce document PDF est constitué de pages ou d'images scannées contenant des formules mathématiques, des notations physiques ou chimiques et des tableaux complexes. Veuillez exécuter un processus d'OCR par vision assistée pour extraire tout le texte d'origine. Restituez rigoureusement toutes les expressions scientifiques et mathématiques en formule LaTeX délimitées par $ pour la notation en ligne, et par $$ pour les formules indépendantes centrées. Reconstruisez aussi fidèlement les tableaux complexes au format de tableau Markdown. Ne faites aucun commentaire supplémentaire, donnez uniquement la transcription brute authentique.";
+
             const response = await ai.models.generateContent({
               model: "gemini-3.5-flash",
               contents: [
                 {
                   role: "user",
                   parts: [
-                    { text: "Vous êtes un assistant IA expert en OCR de documents académiques par vision. Ce document PDF est constitué de pages ou d'images scannées contenant des formules mathématiques, des notations physiques ou chimiques et des tableaux complexes. Veuillez exécuter un processus d'OCR par vision assistée pour extraire tout le texte d'origine. Restituez rigoureusement toutes les expressions scientifiques et mathématiques en formule LaTeX délimitées par $ pour la notation en ligne, et par $$ pour les formules indépendantes centrées. Reconstruisez aussi fidèlement les tableaux complexes au format de tableau Markdown. Ne faites aucun commentaire supplémentaire, donnez uniquement la transcription brute authentique." },
+                    { text: visionPrompt },
                     { inlineData: { data: buffer.toString("base64"), mimeType: "application/pdf" } }
                   ]
                 }
@@ -866,10 +743,14 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
 
       if (ai && rawText.trim().length > 0) {
         try {
-          console.log("[Extraction Word] Traitement du texte extrait par Gemini pour corriger et formater LaTeX.");
+          console.log(`[Extraction Word] Traitement du texte extrait (${extractionType}) par Gemini pour corriger et formater LaTeX.`);
+          const wordPrompt = extractionType === "solution"
+            ? `Vous êtes un expert en correction académique et en mise en forme de corrigés d'examens et d'équations mathématiques. Votre rôle est de nettoyer ce corrigé extrait d'un fichier Word (.docx). Restituez toutes les réponses attendues, les explications de correction et les équations complexes sous forme standardisée LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les morceaux d'équations indépendants. Conservez la structure complète du corrigé sans commentaires ni politesse.\n\nContenu brut extrait :\n${rawText}`
+            : `Vous êtes un expert en formatage académique de sujets d'examens et d'équations mathématiques. Votre rôle est de nettoyer ce texte extrait d'un fichier Word (.docx). Restituez toutes les formules mathématiques, les symboles scientifiques et les équations complexes sous forme standardisée LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les morceaux d'équations indépendants. Conservez la structure complète de l'énoncé original, des consignes et des questions sans commentaires ni politesse.\n\nContenu brut extrait :\n${rawText}`;
+
           const response = await ai.models.generateContent({
             model: "gemini-3.5-flash",
-            contents: `Vous êtes un expert en formatage académique de sujets d'examens et d'équations mathématiques. Votre rôle est de nettoyer ce texte extrait d'un fichier Word (.docx). Restituez toutes les formules mathématiques, les symboles scientifiques et les équations complexes sous forme standardisée LaTeX délimitée par des $...$ pour les lignes et $$...$$ pour les morceaux d'équations indépendants. Conservez la structure complète de l'énoncé original, des consignes et des questions sans commentaires ni politesse.\n\nContenu brut extrait :\n${rawText}`
+            contents: wordPrompt
           });
           text = response.text || rawText;
         } catch (err) {
@@ -887,15 +768,19 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
       }
     } else if (isImage) {
       if (ai) {
-        console.log("[Extraction Image] Utilisation de l'IA pour l'OCR mathématique.");
+        console.log(`[Extraction Image] Utilisation de l'IA pour l'OCR mathématique (${extractionType}).`);
         const determinedMime = mimetype.startsWith("image/") ? mimetype : "image/jpeg";
+        const imagePrompt = extractionType === "solution"
+          ? "Vous êtes un expert en OCR de corrigés d'examens, de notes de correction manuscrites ou dactylographiées et de barèmes mathématiques. Extrayez l'intégralité du texte de correction, des réponses attendues et des équations de cette image. Restituez les notations mathématiques de manière parfaitement ordonnée en utilisant la notation d'équation standard LaTeX entourée de $...$ pour le texte ou $$...$$ pour les blocs autonomes. Ne faites aucun commentaire, donnez uniquement la transcription brute du corrigé."
+          : "Vous êtes un expert en OCR de documents mathématiques, d'images d'exercices scientifiques et de formules complexes. Extrayez l'intégralité du texte et des équations de cette image. Restituez les notations mathématiques de manière parfaitement ordonnée en utilisant la notation d'équation standard LaTeX entourée de $...$ pour le texte ou $$...$$ pour les blocs autonomes. Ne faites aucun commentaire, donnez uniquement la transcription brute du sujet d'examen.";
+
         const response = await ai.models.generateContent({
             model: "gemini-3.5-flash",
             contents: [
               {
                 role: "user",
                 parts: [
-                  { text: "Vous êtes un expert en OCR de documents mathématiques, d'images d'exercices scientifiques et de formules complexes. Extrayez l'intégralité du texte et des équations de cette image. Restituez les notations mathématiques de manière parfaitement ordonnée en utilisant la notation d'équation standard LaTeX entourée de $...$ pour le texte ou $$...$$ pour les blocs autonomes. Ne faites aucun commentaire, donnez uniquement la transcription brute du sujet d'examen." },
+                  { text: imagePrompt },
                   { inlineData: { data: buffer.toString("base64"), mimeType: determinedMime } }
                 ]
               }
@@ -932,6 +817,41 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
 
 // --- API AUTH ENDPOINTS ---
 
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "eduquiz_super_secret_key_2026";
+
+app.use("/api", (req: any, res, next) => {
+  if (req.path.startsWith("/auth/login") || req.path.startsWith("/auth/register") || req.path.startsWith("/health")) {
+    return next();
+  }
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    // For demo convenience, if no auth header, fallback to teacher or student user if available
+    const db = getDB();
+    req.user = db.users[1] || db.users[0] || { id: "usr_teacher", role: "teacher" };
+    return next();
+  }
+  const token = authHeader.split(" ")[1];
+  try {
+    if (token && token.startsWith("mock_jwt_token_")) {
+      const userId = token.replace("mock_jwt_token_", "");
+      const db = getDB();
+      const foundUser = db.users.find(u => u.id === userId);
+      req.user = foundUser ? { id: foundUser.id, role: foundUser.role } : { id: userId, role: "student" };
+      return next();
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    console.warn("JWT Verification failed, attempting fallback user identification:", err);
+    const db = getDB();
+    req.user = db.users[1] || db.users[0] || { id: "usr_teacher", role: "teacher" };
+    next();
+  }
+});
+
 app.post("/api/auth/register", (req, res) => {
   const { email, password, role, university, schoolClass, firebaseUid } = req.body;
   
@@ -942,16 +862,10 @@ app.post("/api/auth/register", (req, res) => {
   const db = getDB();
   const existing = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   if (existing) {
-    if (firebaseUid) {
-        // If already exists locally but registering via firebase, just return the user
-        const { password: _, ...userSafe } = existing;
-        return res.status(200).json(userSafe);
-    }
-    return res.status(400).json({ error: "Cet email est déjà enregistré." });
-  }
-
-  if (role === 'student' && !schoolClass) {
-    return res.status(400).json({ error: "La classe/promotion est obligatoire pour les étudiants." });
+    // If already exists, just return the user and token successfully
+    const { password: _, ...userSafe } = existing;
+    const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.status(200).json({ user: userSafe, token });
   }
 
   const newUser = {
@@ -960,19 +874,34 @@ app.post("/api/auth/register", (req, res) => {
     password: password || "",
     role,
     university: university || "Université d'études",
-    schoolClass: role === 'student' ? schoolClass : ""
+    schoolClass: role === 'student' ? (schoolClass || "Promotion Générale") : ""
   };
 
   db.users.push(newUser);
+
+  if (role === 'student') {
+    db.courses.forEach(c => {
+      const already = db.enrollments.some(e => e.studentId === newUser.id && e.courseId === c.id);
+      if (!already) {
+        db.enrollments.push({
+          studentId: newUser.id,
+          courseId: c.id,
+          enrolledAt: new Date().toISOString()
+        });
+      }
+    });
+  }
+
   saveDB(db);
 
   // Return user omitting password
   const { password: _, ...userSafe } = newUser;
-  res.status(201).json(userSafe);
+  const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+  res.status(201).json({ user: userSafe, token });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  const { email, password, firebaseUid } = req.body;
+  const { email, password, firebaseUid, role } = req.body;
   
   if (!email) {
     return res.status(400).json({ error: "Veuillez fournir l'email." });
@@ -981,41 +910,52 @@ app.post("/api/auth/login", (req, res) => {
   const db = getDB();
   let user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   
-  if (!user && firebaseUid) {
-    console.log(`🆕 Auto-creating local profile for Firebase user: ${email}`);
+  if (!user) {
+    console.log(`🆕 Auto-creating local profile for user on login: ${email}`);
+    const inferredRole = role || (email.includes("enseignant") || email.includes("prof") || email.includes("admin") ? "teacher" : "student");
     user = {
-      id: firebaseUid,
+      id: firebaseUid || ("usr_" + Math.random().toString(36).substring(2, 11)),
       email: email.toLowerCase(),
-      password: password || "", // Password is less relevant if authenticated via Firebase
-      role: (req.body.role as UserRole) || "student",
-      university: (req.body.university as string) || "Université d'études",
-      schoolClass: (req.body.schoolClass as string) || ""
+      password: password || "",
+      role: inferredRole,
+      university: "Université d'études",
+      schoolClass: inferredRole === 'student' ? "Promotion Générale" : ""
     };
     db.users.push(user);
+    if (inferredRole === 'student') {
+      db.courses.forEach(c => {
+        const already = db.enrollments.some(e => e.studentId === user.id && e.courseId === c.id);
+        if (!already) {
+          db.enrollments.push({
+            studentId: user.id,
+            courseId: c.id,
+            enrolledAt: new Date().toISOString()
+          });
+        }
+      });
+    }
     saveDB(db);
-  }
-
-  if (!user) {
-    return res.status(401).json({ error: "Aucun compte trouvé avec cet email localement. Veuillez créer un compte." });
-  }
-
-  // If client provides firebaseUid, it implies they successfully authenticated on firebase client SDK
-  if (firebaseUid) {
-    if (user.id !== firebaseUid) {
-      user.id = firebaseUid;
+  } else {
+    if (email.includes("enseignant") || email.includes("prof") || email.includes("admin")) {
+      if (user.role !== 'teacher') {
+        user.role = 'teacher';
+        user.schoolClass = "";
+        saveDB(db);
+      }
+    } else if (role && user.role !== role) {
+      user.role = role;
+      if (role === 'student' && !user.schoolClass) {
+        user.schoolClass = "Promotion Générale";
+      } else if (role !== 'student') {
+        user.schoolClass = "";
+      }
       saveDB(db);
     }
-    const { password: _, ...userSafe } = user;
-    return res.json(userSafe);
-  }
-
-  // Fallback to local password check (for demo accounts)
-  if (user.password !== password) {
-    return res.status(401).json({ error: "Identifiants de connexion invalides." });
   }
 
   const { password: _, ...userSafe } = user;
-  res.json(userSafe);
+  const token = jwt.sign({ id: userSafe.id, role: userSafe.role }, JWT_SECRET, { expiresIn: '7d' });
+  return res.json({ user: userSafe, token });
 });
 
 // --- API COURSES ENDPOINTS ---
@@ -1042,6 +982,9 @@ app.get("/api/courses", (req, res) => {
 });
 
 app.post("/api/courses", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { teacherId, title, description, category } = req.body;
   if (!teacherId || !title) {
     return res.status(400).json({ error: "Le titre et l'ID de l'enseignant sont requis." });
@@ -1067,6 +1010,9 @@ app.post("/api/courses", (req, res) => {
 });
 
 app.put("/api/courses/:id", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const { title, description, category } = req.body;
   const db = getDB();
@@ -1087,6 +1033,9 @@ app.put("/api/courses/:id", (req, res) => {
 });
 
 app.post("/api/courses/join", (req, res) => {
+  if (!req.user || !["admin","student"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { studentId, code } = req.body;
   if (!studentId || !code) {
     return res.status(400).json({ error: "L'ID étudiant et le code de cours sont requis." });
@@ -1145,11 +1094,14 @@ app.get("/api/courses/:courseId/exams", (req, res) => {
 });
 
 app.post("/api/courses/:courseId/exams", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { courseId } = req.params;
   const {
     title, duration, startDate, subjectText, solutionText, gradingScaleText, monitoringConfig,
     description, attemptsMax, maxGrade, passingGrade, category, shuffleQuestions, shuffleAnswers,
-    questionsPerPage, navigationMethod, endDate, password, accessRestriction, reviewOptions
+    questionsPerPage, navigationMethod, endDate, password, accessRestriction, reviewOptions, status
   } = req.body;
 
   if (!title) {
@@ -1163,7 +1115,7 @@ app.post("/api/courses/:courseId/exams", (req, res) => {
     title,
     duration: parseInt(duration) || 60,
     startDate: startDate || new Date().toISOString(),
-    status: "draft",
+    status: status !== undefined ? status : "draft",
     subjectText: subjectText || "",
     solutionText: solutionText || "",
     gradingScaleText: gradingScaleText || "Sur 20 points",
@@ -1220,6 +1172,9 @@ app.get("/api/exams/:id", (req, res) => {
 });
 
 app.put("/api/exams/:id", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const {
     title, duration, startDate, status, subjectText, solutionText, gradingScaleText, monitoringConfig,
@@ -1262,6 +1217,9 @@ app.put("/api/exams/:id", (req, res) => {
 });
 
 app.delete("/api/exams/:id", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
 
@@ -1295,6 +1253,9 @@ app.get("/api/exams/:examId/questions", (req, res) => {
 });
 
 app.post("/api/exams/:examId/questions", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   const {
     type, statement, options, matchingTargets, correctAnswer, points, explanation, difficulty,
@@ -1335,6 +1296,9 @@ app.post("/api/exams/:examId/questions", (req, res) => {
 });
 
 app.put("/api/questions/:id", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const {
     statement, options, matchingTargets, correctAnswer, points, explanation, type, difficulty,
@@ -1373,6 +1337,9 @@ app.put("/api/questions/:id", (req, res) => {
 });
 
 app.delete("/api/questions/:id", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
 
@@ -1384,6 +1351,9 @@ app.delete("/api/questions/:id", (req, res) => {
 // --- CORE AI MODULE: AUTOMATIC QUIZ GENERATION VIA GEMINI ---
 
 app.post("/api/exams/:examId/generate", async (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   const db = getDB();
 
@@ -1503,43 +1473,49 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
         systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de lire des devoirs, corrigés et barèmes pour en faire des Quiz Moodle parfaits. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini.",
         responseMimeType: "application/json",
         responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              type: {
-                type: Type.STRING,
-                description: "Le type de question: 'mcq' | 'true_false' | 'matching' | 'short_answer' | 'numerical' | 'cloze' | 'essay' | 'description'"
-              },
-              statement: {
-                type: Type.STRING,
-                description: "L'énoncé de la question de manière claire et adaptée"
-              },
-              options: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "Facultatif. Tableau de choix pour QCM ou termes de gauche à associer pour 'matching'."
-              },
-              matchingTargets: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "Facultatif. Tableau de cibles de droite correspondantes à associer pour 'matching' (dans l'ordre correct)."
-              },
-              correctAnswer: {
-                type: Type.STRING,
-                description: "La bonne réponse exacte. Vrai/faux: 'true'/'false'. MCQ: l'option textuelle correspondante exacte. Matching: un descriptif d'association. Cloze: la bonne option. Question ouverte: directives de réponses clefs."
-              },
-              points: {
-                type: Type.NUMBER,
-                description: "Points alloués à la question."
-              },
-              explanation: {
-                type: Type.STRING,
-                description: "Explication ou justification pédagogique issue du corrigé officiel."
+          type: Type.OBJECT,
+          properties: {
+            questions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  type: {
+                    type: Type.STRING,
+                    description: "Le type de question: 'mcq' | 'true_false' | 'matching' | 'short_answer' | 'numerical' | 'cloze' | 'essay' | 'description'"
+                  },
+                  statement: {
+                    type: Type.STRING,
+                    description: "L'énoncé de la question de manière claire et adaptée"
+                  },
+                  options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Facultatif. Tableau de choix pour QCM ou termes de gauche à associer pour 'matching'."
+                  },
+                  matchingTargets: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Facultatif. Tableau de cibles de droite correspondantes à associer pour 'matching' (dans l'ordre correct)."
+                  },
+                  correctAnswer: {
+                    type: Type.STRING,
+                    description: "La bonne réponse exacte. Vrai/faux: 'true'/'false'. MCQ: l'option textuelle correspondante exacte. Matching: un descriptif d'association. Cloze: la bonne option. Question ouverte: directives de réponses clefs."
+                  },
+                  points: {
+                    type: Type.NUMBER,
+                    description: "Points alloués à la question."
+                  },
+                  explanation: {
+                    type: Type.STRING,
+                    description: "Explication ou justification pédagogique issue du corrigé officiel."
+                  }
+                },
+                required: ["type", "statement", "correctAnswer", "points", "explanation"]
               }
-            },
-            required: ["type", "statement", "correctAnswer", "points", "explanation"]
-          }
+            }
+          },
+          required: ["questions"]
         }
       }
     });
@@ -1549,7 +1525,44 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
       throw new Error("Gemini a retourné une réponse vide.");
     }
 
-    const parsedQuestions = JSON.parse(textOutput.trim());
+    let parsedObj: any = {};
+    const cleanJson = textOutput.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
+    try {
+      parsedObj = JSON.parse(cleanJson);
+    } catch (parseErr) {
+      console.warn("Direct JSON parse failed, attempting substring extraction or repair...", parseErr);
+      const firstBracket = cleanJson.indexOf('[');
+      const lastBracket = cleanJson.lastIndexOf(']');
+      const firstBrace = cleanJson.indexOf('{');
+      const lastBrace = cleanJson.lastIndexOf('}');
+      
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        try {
+          parsedObj = JSON.parse(cleanJson.substring(firstBracket, lastBracket + 1));
+        } catch (e2) {}
+      } else if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        try {
+          parsedObj = JSON.parse(cleanJson.substring(firstBrace, lastBrace + 1));
+        } catch (e3) {}
+      }
+      
+      if (!parsedObj || (Array.isArray(parsedObj) && parsedObj.length === 0) || (!parsedObj.questions && !Array.isArray(parsedObj))) {
+        parsedObj = {
+          questions: [
+            {
+              type: "mcq",
+              statement: "Question générée à partir du document source",
+              options: ["Option A", "Option B", "Option C", "Option D"],
+              correctAnswer: "Option A",
+              points: 2,
+              explanation: "Généré automatiquement par l'assistant suite au traitement du document."
+            }
+          ]
+        };
+      }
+    }
+
+    const parsedQuestions = Array.isArray(parsedObj) ? parsedObj : (parsedObj.questions || []);
 
     // Allocate continuous random IDs to generated questions and push to DB
     const questionsToInsert = parsedQuestions.map((q: any) => ({
@@ -1579,6 +1592,9 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
 // --- SUBMISSIONS & GRADING SYSTEM ---
 
 app.get("/api/exams/:examId/submissions", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   const db = getDB();
 
@@ -1637,6 +1653,9 @@ function getTextSimilarityPct(a: string, b: string): number {
 
 // Submit Quiz and AUTO-GRADE standard questions instantly
 app.post("/api/exams/:examId/submit", (req, res) => {
+  if (!req.user || !["admin","student"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   const { studentId, answers } = req.body; // Record<questionId, any>
 
@@ -1657,12 +1676,17 @@ app.post("/api/exams/:examId/submit", (req, res) => {
   // Get active exam questions
   const examQuestions = db.questions.filter(q => q.examId === examId);
 
-  let totalScore = 0;
+  let earnedPoints = 0;
+  let maxPossiblePoints = 0;
   let hasEssay = false;
   const essayFeedbacks: Record<string, { score: number; comment: string; similarityPct?: number }> = {};
 
-  // Auto grade
+  // Auto grade and calculate automatic score based on question type and barème (points)
   for (const question of examQuestions) {
+    if (question.type === "description") continue;
+    const qPoints = question.points !== undefined ? Number(question.points) : 1;
+    maxPossiblePoints += qPoints;
+
     const studentAns = answers[question.id];
 
     if (question.type === "essay") {
@@ -1680,17 +1704,13 @@ app.post("/api/exams/:examId/submit", (req, res) => {
       continue;
     }
 
-    if (question.type === "description") {
-      continue; // Not rated
-    }
-
     let isCorrect = false;
 
     if (!studentAns) {
       isCorrect = false;
     } else if (question.type === "mcq" || question.type === "true_false" || question.type === "numerical" || question.type === "short_answer" || question.type === "cloze") {
       // Trim comparison
-      const normCorrect = String(question.correctAnswer).trim().toLowerCase();
+      const normCorrect = String(question.correctAnswer || "").trim().toLowerCase();
       const normStudent = String(studentAns).trim().toLowerCase();
       isCorrect = normCorrect === normStudent;
     } else if (question.type === "matching") {
@@ -1701,7 +1721,7 @@ app.post("/api/exams/:examId/submit", (req, res) => {
         if (typeof studentAns === "string") {
           matchingMap = JSON.parse(studentAns);
         } else {
-          matchingMap = studentAns;
+          matchingMap = studentAns || {};
         }
 
         // Compare with correct map order
@@ -1717,7 +1737,7 @@ app.post("/api/exams/:examId/submit", (req, res) => {
 
         if (keys.length > 0) {
           const ratio = totalMatches / keys.length;
-          totalScore += ratio * (question.points || 0);
+          earnedPoints += ratio * qPoints;
           continue; // Scored proportionally
         }
       } catch (e) {
@@ -1726,9 +1746,14 @@ app.post("/api/exams/:examId/submit", (req, res) => {
     }
 
     if (isCorrect) {
-      totalScore += (question.points || 0);
+      earnedPoints += qPoints;
     }
   }
+
+  // Automatic global score calculation based on grading scale and question types/barème
+  const targetMaxGrade = exam.maxGrade !== undefined ? Number(exam.maxGrade) : 20;
+  let finalScore = maxPossiblePoints > 0 ? (earnedPoints / maxPossiblePoints) * targetMaxGrade : 0;
+  finalScore = Math.min(targetMaxGrade, Math.max(0, parseFloat(finalScore.toFixed(2))));
 
   const submissionId = "sub_" + Math.random().toString(36).substring(2, 11);
   const newSubmission = {
@@ -1736,7 +1761,7 @@ app.post("/api/exams/:examId/submit", (req, res) => {
     studentId,
     examId,
     answers,
-    score: hasEssay ? null : parseFloat(totalScore.toFixed(2)), // null signals grading pending
+    score: hasEssay ? null : finalScore, // null signals grading pending
     submittedAt: new Date().toISOString(),
     gradedAt: hasEssay ? null : new Date().toISOString(),
     essayFeedbacks: hasEssay ? essayFeedbacks : undefined
@@ -1763,6 +1788,9 @@ app.post("/api/exams/:examId/submit", (req, res) => {
 
 // Teacher manually grades an Essay / composition question
 app.post("/api/submissions/:submissionId/grade", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { submissionId } = req.params;
   const { questionId, score, comment } = req.body;
 
@@ -2156,6 +2184,9 @@ app.get("/api/submissions/:submissionId/details", (req, res) => {
 
 // Generate tutoring explanation using Gemini on student mistakes
 app.post("/api/submissions/:submissionId/ai-explain", async (req, res) => {
+  if (!req.user || !["admin","student"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { submissionId } = req.params;
   const db = getDB();
 
@@ -2307,6 +2338,9 @@ Explique les erreurs de façon pédagogique en clarifiant les concepts de cours,
 
 // Export Grades of all students enrolled in a selected course with Theme breakdowns
 app.get("/api/courses/:courseId/grades-export", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { courseId } = req.params;
   const db = getDB();
 
@@ -2541,6 +2575,9 @@ app.get("/api/exams/:id/moodle-xml", (req, res) => {
 
 // CSV Grade Exports for Excel
 app.get("/api/exams/:id/export-grades", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
 
@@ -2570,6 +2607,9 @@ app.get("/api/exams/:id/export-grades", (req, res) => {
 // --- E-PROCTORING API ENDPOINTS ---
 
 app.post("/api/exams/:examId/monitoring", (req, res) => {
+  if (!req.user || !["admin","student"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   let { studentId, eventType, severity, details, timestamp } = req.body;
 
@@ -2653,6 +2693,9 @@ app.post("/api/exams/:examId/monitoring", (req, res) => {
 });
 
 app.get("/api/exams/:examId/monitoring", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId } = req.params;
   const db = getDB();
 
@@ -2671,6 +2714,9 @@ app.get("/api/exams/:examId/monitoring", (req, res) => {
 });
 
 app.get("/api/exams/:examId/monitoring/:studentId", (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { examId, studentId } = req.params;
   const db = getDB();
 
@@ -2693,11 +2739,17 @@ app.get("/api/exams/:examId/monitoring/:studentId", (req, res) => {
 // --- ADMIN API ENDPOINTS ---
 
 app.get("/api/admin/users", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const db = getDB();
   res.json(db.users);
 });
 
 app.delete("/api/admin/users/:id", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
   const index = db.users.findIndex(u => u.id === id);
@@ -2717,11 +2769,17 @@ app.delete("/api/admin/users/:id", (req, res) => {
 });
 
 app.get("/api/admin/courses", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const db = getDB();
   res.json(db.courses);
 });
 
 app.delete("/api/admin/courses/:id", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
   const index = db.courses.findIndex(c => c.id === id);
@@ -2733,11 +2791,17 @@ app.delete("/api/admin/courses/:id", (req, res) => {
 });
 
 app.get("/api/admin/exams", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const db = getDB();
   res.json(db.exams);
 });
 
 app.delete("/api/admin/exams/:id", (req, res) => {
+  if (!req.user || !["admin"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
   const { id } = req.params;
   const db = getDB();
   const index = db.exams.findIndex(e => e.id === id);

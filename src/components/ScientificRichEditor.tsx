@@ -314,6 +314,8 @@ interface ScientificRichEditorProps {
   label?: string;
   onUploadClick?: () => void;
   hasUpload?: boolean;
+  uploadLabel?: string;
+  extractionType?: "subject" | "solution" | "general";
 }
 
 export function ScientificRichEditor({
@@ -323,7 +325,8 @@ export function ScientificRichEditor({
   rows = 5,
   label,
   onUploadClick,
-  hasUpload = false
+  hasUpload = false,
+  uploadLabel = "Transcrire sujet par l'IA"
 }: ScientificRichEditorProps) {
   const [activeTab, setActiveTab] = useState<"edit" | "preview" | "visual">("visual");
   const [activeMathCategory, setActiveMathCategory] = useState<number>(0);
@@ -522,7 +525,7 @@ export function ScientificRichEditor({
               id={"btn-transcribe-ia"}
             >
               <UploadCloud className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Transcrire sujet par l'IA</span>
+              <span>{uploadLabel}</span>
             </button>
           )}
         </div>

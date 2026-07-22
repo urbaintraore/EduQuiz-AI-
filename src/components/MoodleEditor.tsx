@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Plus, Trash, Copy, Search, Filter, Settings, Folder, FolderPlus,
   Archive, Download, Upload, Eye, Check, X, ChevronRight, ChevronDown, Edit2,
@@ -72,6 +72,50 @@ export default function MoodleEditor({
   const [quizAccessRestriction, setQuizAccessRestriction] = useState("");
   const [quizReviewResults, setQuizReviewResults] = useState(true);
   const [quizImmediateFeedback, setQuizImmediateFeedback] = useState(true);
+
+  // Subject and Solution states for exam
+  const [quizSubject, setQuizSubject] = useState("");
+  const [quizSolution, setQuizSolution] = useState("");
+  const subjectFileRef = useRef<HTMLInputElement>(null);
+  const solutionFileRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string>>, extractionType: "subject" | "solution" = "subject") => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type === "text/plain" || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv')) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        setter(evt.target?.result as string);
+        triggerToast("Fichier texte chargé avec succès.", "success");
+      };
+      reader.readAsText(file);
+    } else {
+      triggerToast("Extraction du contenu en cours...", "info");
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("type", extractionType);
+
+      try {
+        const res = await fetch("/api/extract-text", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          setter(data.text || "");
+          triggerToast("Contenu extrait et chargé avec succès.", "success");
+        } else {
+          const err = await res.json();
+          triggerToast(err.error || "Erreur lors de l'extraction.", "error");
+        }
+      } catch (err) {
+        triggerToast("Erreur de connexion lors de l'extraction.", "error");
+      }
+    }
+    e.target.value = "";
+  };
 
   // Question Form state
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -212,6 +256,8 @@ export default function MoodleEditor({
     setQuizAccessRestriction(exam.accessRestriction || "");
     setQuizReviewResults(exam.reviewOptions ? exam.reviewOptions.showResults : true);
     setQuizImmediateFeedback(exam.reviewOptions ? exam.reviewOptions.immediateFeedback : true);
+    setQuizSubject(exam.subjectText || "");
+    setQuizSolution(exam.solutionText || "");
   };
 
   const clearExamFields = () => {
@@ -232,10 +278,12 @@ export default function MoodleEditor({
     setQuizAccessRestriction("");
     setQuizReviewResults(true);
     setQuizImmediateFeedback(true);
+    setQuizSubject("");
+    setQuizSolution("");
     setExamQuestions([]);
   };
 
-  const handleCreateOrUpdateQuiz = async (e: React.FormEvent) => {
+  const handleCreateOrUpdateQuiz = async (e: React.FormEvent, targetStatus?: "draft" | "published") => {
     e.preventDefault();
     if (!selectedCourse) {
       triggerToast("Veuillez sélectionner un cours d'abord.", "error");
@@ -247,6 +295,8 @@ export default function MoodleEditor({
     }
 
     setAutosaveStatus("saving");
+
+    const statusVal = targetStatus || (selectedExam ? selectedExam.status : "draft");
 
     const payload = {
       title: quizTitle,
@@ -264,7 +314,10 @@ export default function MoodleEditor({
       endDate: quizEndDate || undefined,
       password: quizPassword,
       accessRestriction: quizAccessRestriction,
-      reviewOptions: { showResults: quizReviewResults, immediateFeedback: quizImmediateFeedback }
+      reviewOptions: { showResults: quizReviewResults, immediateFeedback: quizImmediateFeedback },
+      subjectText: quizSubject,
+      solutionText: quizSolution,
+      status: statusVal
     };
 
     try {
@@ -288,7 +341,7 @@ export default function MoodleEditor({
       if (res.ok) {
         const data = await res.json();
         setAutosaveStatus("synced");
-        triggerToast(selectedExam ? "Quiz enregistré avec succès !" : "Quiz Moodle créé avec succès !", "success");
+        triggerToast(statusVal === "draft" ? "Examen enregistré comme brouillon." : (selectedExam ? "Quiz enregistré et publié avec succès !" : "Quiz Moodle créé et publié avec succès !"), "success");
         fetchExams();
         setSelectedExam(data);
         setActiveTab("questions_list");
@@ -851,6 +904,58 @@ export default function MoodleEditor({
                 />
               </div>
 
+              <div className="md:col-span-2 space-y-4 pt-2">
+                <div>
+                  <div className="flex items-center justify-between mb-1 pb-1">
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 uppercase">
+                      Sujet original examen (Texte ou Éléments majeurs à évaluer)
+                    </label>
+                  </div>
+                  <input
+                    ref={subjectFileRef}
+                    type="file"
+                    accept=".txt,.md,.csv,.pdf,.docx,image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e, setQuizSubject, "subject")}
+                  />
+                  <ScientificRichEditor
+                    value={quizSubject}
+                    onChange={(val) => setQuizSubject(val)}
+                    placeholder="Saisissez ou collez-ici le sujet ou contenu sur lequel porteront les questions..."
+                    rows={4}
+                    hasUpload={true}
+                    extractionType="subject"
+                    uploadLabel="Transcrire sujet par l'IA"
+                    onUploadClick={() => subjectFileRef.current?.click()}
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1 pb-1">
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 uppercase">
+                      Corrigé type (Réponses et corrections de référence)
+                    </label>
+                  </div>
+                  <input
+                    ref={solutionFileRef}
+                    type="file"
+                    accept=".txt,.md,.csv,.pdf,.docx,image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e, setQuizSolution, "solution")}
+                  />
+                  <ScientificRichEditor
+                    value={quizSolution}
+                    onChange={(val) => setQuizSolution(val)}
+                    placeholder="Saisissez les réponses attendues pour aider l'IA à attribuer des explications adaptées Moodle..."
+                    rows={3}
+                    hasUpload={true}
+                    extractionType="solution"
+                    uploadLabel="Transcrire corrigé par l'IA"
+                    onUploadClick={() => solutionFileRef.current?.click()}
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Durée (minutes) <span className="text-rose-500">*</span></label>
                 <input
@@ -1066,13 +1171,22 @@ export default function MoodleEditor({
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={(e) => handleCreateOrUpdateQuiz(e, "draft")}
+                className="bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs py-2.5 px-5 rounded-xl shadow-xs transition duration-150 flex items-center space-x-2 cursor-pointer"
+              >
+                <Archive className="w-4 h-4" />
+                <span>Enregistrer comme brouillon</span>
+              </button>
               <button
                 type="submit"
+                onClick={(e) => handleCreateOrUpdateQuiz(e, "published")}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-6 rounded-xl shadow-md transition duration-150 flex items-center space-x-2 cursor-pointer"
               >
                 <Save className="w-4 h-4" />
-                <span>{selectedExam ? "Sauvegarder les paramètres" : "Créer le Quiz"}</span>
+                <span>{selectedExam ? "Sauvegarder & Publier" : "Créer & Publier le Quiz"}</span>
               </button>
             </div>
           </form>

@@ -16,7 +16,7 @@ interface AuthPageProps {
 
 export default function AuthPage({ onSuccess }: AuthPageProps) {
   const [isLogin, setIsLogin] = useState(true);
-  const [role, setRole] = useState<UserRole>("teacher");
+  const [role, setRole] = useState<UserRole>("student");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [university, setUniversity] = useState("");
@@ -28,6 +28,7 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
   const setDemoAccount = (roleSelection: "teacher" | "student") => {
     setEmail(roleSelection === "teacher" ? "enseignant@eduquiz.fr" : "etudiant@eduquiz.fr");
     setPassword("password123");
+    setRole(roleSelection);
     setIsLogin(true);
     setError("");
   };
@@ -85,7 +86,7 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
 
       const endpoint = isLogin ? "/api/auth/login" : "/api/auth/register";
       const payload = isLogin
-        ? { email, password, firebaseUid }
+        ? { email, password, firebaseUid, role }
         : {
             email,
             password,
@@ -121,7 +122,15 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
         throw new Error(data?.error || "Une erreur est survenue lors de l'authentification serveur.");
       }
 
-      onSuccess(data);
+      const user = data.user || data;
+      if (data.token) {
+        localStorage.setItem("eduquiz_token", data.token);
+      } else {
+        localStorage.setItem("eduquiz_token", "mock_jwt_token_" + user.id);
+      }
+      localStorage.setItem("eduquiz_user", JSON.stringify(user));
+
+      onSuccess(user);
     } catch (err: any) {
       setError(err.message || "Impossible de se connecter.");
     } finally {
@@ -218,40 +227,38 @@ export default function AuthPage({ onSuccess }: AuthPageProps) {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Role selection only on SignUp */}
-            {!isLogin && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  Sélectionnez votre rôle
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setRole("teacher")}
-                    className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center space-y-1.5 ${
-                      role === "teacher"
-                        ? "border-indigo-600 bg-indigo-50/50 text-indigo-700"
-                        : "border-slate-200 hover:border-slate-300 text-slate-500"
-                    }`}
-                  >
-                    <Laptop className="w-5 h-5" />
-                    <span className="text-xs font-bold">Enseignant</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRole("student")}
-                    className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center space-y-1.5 ${
-                      role === "student"
-                        ? "border-indigo-600 bg-indigo-50/50 text-indigo-700"
-                        : "border-slate-200 hover:border-slate-300 text-slate-500"
-                    }`}
-                  >
-                    <GraduationCap className="w-5 h-5" />
-                    <span className="text-xs font-bold">Étudiant</span>
-                  </button>
-                </div>
+            {/* Role selection on both login and signup */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+                Sélectionnez votre rôle
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRole("teacher")}
+                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center space-y-1.5 ${
+                    role === "teacher"
+                      ? "border-indigo-600 bg-indigo-50/50 text-indigo-700"
+                      : "border-slate-200 hover:border-slate-300 text-slate-500"
+                  }`}
+                >
+                  <Laptop className="w-5 h-5" />
+                  <span className="text-xs font-bold">Enseignant</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole("student")}
+                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center space-y-1.5 ${
+                    role === "student"
+                      ? "border-indigo-600 bg-indigo-50/50 text-indigo-700"
+                      : "border-slate-200 hover:border-slate-300 text-slate-500"
+                  }`}
+                >
+                  <GraduationCap className="w-5 h-5" />
+                  <span className="text-xs font-bold">Étudiant</span>
+                </button>
               </div>
-            )}
+            </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
