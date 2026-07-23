@@ -438,30 +438,45 @@ async function initializeDatabaseState() {
 
 // Database utility functions
 function getDB(): DBStructure {
+  let db: DBStructure;
   if (dbMemory) {
-    return dbMemory;
-  }
-  try {
-    if (!fs.existsSync(DB_FILE)) {
-      const rootDbPath = path.join(process.cwd(), "db.json");
-      if (fs.existsSync(rootDbPath)) {
-        try {
-          fs.copyFileSync(rootDbPath, DB_FILE);
-        } catch (_) {}
+    db = dbMemory;
+  } else {
+    try {
+      if (!fs.existsSync(DB_FILE)) {
+        const rootDbPath = path.join(process.cwd(), "db.json");
+        if (fs.existsSync(rootDbPath)) {
+          try {
+            fs.copyFileSync(rootDbPath, DB_FILE);
+          } catch (_) {}
+        }
       }
+      if (!fs.existsSync(DB_FILE)) {
+        fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), "utf8");
+        dbMemory = { ...INITIAL_DB };
+        db = INITIAL_DB;
+      } else {
+        const raw = fs.readFileSync(DB_FILE, "utf8");
+        dbMemory = JSON.parse(raw);
+        db = dbMemory!;
+      }
+    } catch (err) {
+      console.error("Error reading db.json, returning initial mockup state:", err);
+      db = { ...INITIAL_DB };
     }
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), "utf8");
-      dbMemory = { ...INITIAL_DB };
-      return INITIAL_DB;
-    }
-    const raw = fs.readFileSync(DB_FILE, "utf8");
-    dbMemory = JSON.parse(raw);
-    return dbMemory!;
-  } catch (err) {
-    console.error("Error reading db.json, returning initial mockup state:", err);
-    return INITIAL_DB;
   }
+
+  // Guarantee all array structures exist
+  db.users = Array.isArray(db.users) ? db.users : [];
+  db.courses = Array.isArray(db.courses) ? db.courses : [];
+  db.enrollments = Array.isArray(db.enrollments) ? db.enrollments : [];
+  db.exams = Array.isArray(db.exams) ? db.exams : [];
+  db.questions = Array.isArray(db.questions) ? db.questions : [];
+  db.submissions = Array.isArray(db.submissions) ? db.submissions : [];
+  db.monitoringEvents = Array.isArray(db.monitoringEvents) ? db.monitoringEvents : [];
+  db.monitoringReports = Array.isArray(db.monitoringReports) ? db.monitoringReports : [];
+
+  return db;
 }
 
 // Background sync writer function
@@ -923,8 +938,8 @@ app.post("/api/auth/register", (req, res) => {
     const token = jwtSign({ id: userSafe.id, role: userSafe.role }, { expiresIn: '7d' });
     return res.status(201).json({ user: userSafe, token });
   } catch (err: any) {
-    console.error("❌ Exception in register endpoint:", err);
-    return res.status(500).json({ error: "Erreur serveur lors de l'inscription.", details: err.message || String(err) });
+    console.error("❌ Exception in register endpoint (FULL STACK TRACE):", err?.stack || err);
+    return res.status(500).json({ error: "Erreur serveur lors de l'inscription.", details: err?.message || String(err) });
   }
 });
 
@@ -937,9 +952,6 @@ app.post("/api/auth/login", (req, res) => {
     }
 
     const db = getDB();
-    db.users = db.users || [];
-    db.courses = db.courses || [];
-    db.enrollments = db.enrollments || [];
 
     let user = db.users.find(u => u && u.email && typeof u.email === "string" && u.email.toLowerCase() === email.toLowerCase());
     
@@ -990,8 +1002,8 @@ app.post("/api/auth/login", (req, res) => {
     const token = jwtSign({ id: userSafe.id, role: userSafe.role }, { expiresIn: '7d' });
     return res.json({ user: userSafe, token });
   } catch (err: any) {
-    console.error("❌ Exception in login endpoint:", err);
-    return res.status(500).json({ error: "Erreur serveur lors de la connexion.", details: err.message || String(err) });
+    console.error("❌ Exception in login endpoint (FULL STACK TRACE):", err?.stack || err);
+    return res.status(500).json({ error: "Erreur serveur lors de la connexion.", details: err?.message || String(err) });
   }
 });
 
@@ -3210,6 +3222,21 @@ if (isProductionEnv) {
   }
 }
 
+// Global Error Handling Middleware - MUST be attached AFTER all routes and middlewares
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("🚨 UNHANDLED SERVER EXCEPTION DETECTED:", err?.stack || err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: err?.message || "Une erreur interne du serveur est survenue.",
+    status,
+    details: err?.message || String(err),
+    stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
+  });
+});
+
 const startServer = async () => {
   // Vite setup for development asset compiling & livereload (local development only)
   if (!isProductionEnv) {
@@ -3220,20 +3247,6 @@ const startServer = async () => {
     });
     app.use(vite.middlewares);
   }
-
-  // Robust Global Error Handling Middleware - MUST be attached AFTER all routes and middlewares
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("🚨 UNHANDLED SERVER EXCEPTION DETECTED:", err);
-    if (res.headersSent) {
-      return next(err);
-    }
-    const status = err.status || err.statusCode || 500;
-    res.status(status).json({
-      error: err?.message || "Une erreur interne du serveur est survenue.",
-      status,
-      stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
-    });
-  });
 
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
@@ -3246,12 +3259,15 @@ const startServer = async () => {
   initializeDatabaseState().catch(err => console.error("Error during background DB initialization:", err));
 };
 
-// In Vercel serverless environments, we export 'app' without calling 'startServer()' synchronously.
-// The database lazy-initialization middleware will automatically set up dbMemory on the first API request.
 if (!process.env.VERCEL) {
   startServer().catch((err) => {
     console.error("Failed to start server:", err);
   });
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = app;
+  (module.exports as any).default = app;
 }
 
 export default app;
