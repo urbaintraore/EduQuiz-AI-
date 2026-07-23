@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BookOpen,
@@ -48,7 +48,8 @@ import {
   TrendingUp,
   Radio,
   BarChart2,
-  Brain
+  Brain,
+  RefreshCw
 } from "lucide-react";
 import Navbar from "./components/Navbar";
 import AuthPage from "./components/AuthPage";
@@ -354,18 +355,256 @@ function ExamQuestionEditor({
 }
 
 function ExamMonitoringView({ exam, course, triggerToast }: { exam: Exam, course: Course | null, triggerToast: any }) {
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+
+  const fetchMonitoringData = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/exams/${exam.id}/monitoring`);
+      if (res.ok) {
+        const data = await res.json();
+        setReports(data || []);
+        setLastRefreshed(new Date());
+      }
+    } catch (e) {
+      console.error("Monitoring fetch error:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [exam.id]);
+
+  useEffect(() => {
+    fetchMonitoringData();
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchMonitoringData();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [fetchMonitoringData, autoRefresh]);
+
+  // Aggregate counters
+  const totalStudents = reports.length;
+  let totalAlerts = 0;
+  let tabSwitchesCount = 0;
+  let fullscreenExitsCount = 0;
+  let highRiskCount = 0;
+
+  reports.forEach((r) => {
+    if (r.riskLevel === 'Élevée' || r.riskLevel === 'Très élevée') {
+      highRiskCount++;
+    }
+    const evs = r.events || [];
+    evs.forEach((ev: any) => {
+      totalAlerts++;
+      if (ev.eventType === 'TAB_SWITCH' || ev.eventType === 'TAB_CHANGED') tabSwitchesCount++;
+      if (ev.eventType === 'FULLSCREEN_EXIT') fullscreenExitsCount++;
+    });
+  });
+
   return (
-    <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-      <div className="flex justify-between items-center">
-        <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center space-x-2">
-          <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
-          <span>Supervision en Direct — {exam.title}</span>
-        </h4>
-        <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 text-[10px] font-bold rounded-full border border-emerald-200/50">
-          Système Actif (Anti-triche Moodle)
-        </span>
+    <div className="p-6 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 rounded-2xl border border-emerald-200/50">
+            <Radio className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+              <span>Supervision Anti-Triche en Temps Réel</span>
+              <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                LIVE
+              </span>
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Session : <strong className="text-slate-800 dark:text-slate-200">{exam.title}</strong> ({course?.title || "Cours"})
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition cursor-pointer flex items-center space-x-1.5 ${
+              autoRefresh
+                ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${autoRefresh ? "bg-emerald-500 animate-ping" : "bg-slate-400"}`}></span>
+            <span>{autoRefresh ? "Auto-Sync 3s" : "Sync en pause"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={fetchMonitoringData}
+            className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl transition cursor-pointer"
+            title="Rafraîchir les alertes"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
-      <p className="text-xs text-slate-500">Aucun étudiant n'a encore démarré cette session d'examen en direct.</p>
+
+      {/* Counters Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
+          <div className="text-[10px] font-mono font-bold uppercase text-slate-400 tracking-wider">Étudiants Suivis</div>
+          <div className="text-xl font-extrabold text-slate-900 dark:text-slate-100 mt-1">{totalStudents}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Session active</div>
+        </div>
+
+        <div className="p-4 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-2xl border border-indigo-200/80 dark:border-indigo-900/40">
+          <div className="text-[10px] font-mono font-bold uppercase text-indigo-600 dark:text-indigo-400 tracking-wider">Total Alertes Focus</div>
+          <div className="text-xl font-extrabold text-indigo-700 dark:text-indigo-300 mt-1">{totalAlerts}</div>
+          <div className="text-[10px] text-indigo-500/80 mt-0.5">Onglets & écrans</div>
+        </div>
+
+        <div className="p-4 bg-amber-50/60 dark:bg-amber-950/30 rounded-2xl border border-amber-200/80 dark:border-amber-900/40">
+          <div className="text-[10px] font-mono font-bold uppercase text-amber-700 dark:text-amber-400 tracking-wider">Switches d'Onglet</div>
+          <div className="text-xl font-extrabold text-amber-800 dark:text-amber-300 mt-1">{tabSwitchesCount}</div>
+          <div className="text-[10px] text-amber-600/80 mt-0.5">Changements détectés</div>
+        </div>
+
+        <div className="p-4 bg-rose-50/60 dark:bg-rose-950/30 rounded-2xl border border-rose-200/80 dark:border-rose-900/40">
+          <div className="text-[10px] font-mono font-bold uppercase text-rose-600 dark:text-rose-400 tracking-wider">Risque Élevé</div>
+          <div className="text-xl font-extrabold text-rose-700 dark:text-rose-300 mt-1">{highRiskCount}</div>
+          <div className="text-[10px] text-rose-500/80 mt-0.5">Anomalies sévères</div>
+        </div>
+      </div>
+
+      {/* HISTORIQUE DES ALERTES DE FOCUS PAR ÉTUDIANT (LIST UNDER COUNTERS) */}
+      <div className="space-y-4 pt-2">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+          <h5 className="text-xs font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center space-x-2">
+            <ShieldAlert className="w-4 h-4 text-amber-500" />
+            <span>Historique des Alertes de Focus (Tab / Fullscreen) par Étudiant</span>
+          </h5>
+          <span className="text-[11px] text-slate-400 font-mono">MaJ : {lastRefreshed.toLocaleTimeString("fr-FR")}</span>
+        </div>
+
+        {reports.length === 0 ? (
+          <div className="text-center py-10 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 text-slate-400 space-y-2">
+            <Radio className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto animate-pulse" />
+            <p className="text-xs font-semibold">Aucune activité d'examen détectée actuellement.</p>
+            <p className="text-[11px]">Les événements de focus (changement d'onglet, sortie du mode plein écran) apparaîtront ici dès qu'un étudiant composera.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {reports.map((report) => {
+              const studentName = report.studentName || report.studentEmail || "Étudiant";
+              const eventsList: any[] = report.events || [];
+              const tabEvents = eventsList.filter((e: any) => e.eventType === "TAB_SWITCH" || e.eventType === "TAB_CHANGED");
+              const fullscreenEvents = eventsList.filter((e: any) => e.eventType === "FULLSCREEN_EXIT");
+              const blurEvents = eventsList.filter((e: any) => e.eventType === "WINDOW_BLUR");
+
+              return (
+                <div
+                  key={report.id || report.studentId}
+                  className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/80 p-4 space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200/60 dark:border-slate-700 pb-2.5">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs border border-indigo-200 dark:border-indigo-800">
+                        {studentName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <h6 className="text-xs font-bold text-slate-900 dark:text-slate-100">{studentName}</h6>
+                        <p className="text-[10px] text-slate-400 font-mono">{report.studentEmail}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                        Score : {report.suspicionScore || 0} pts
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-lg border ${
+                          report.riskLevel === "Très élevée" || report.riskLevel === "Élevée"
+                            ? "bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border-rose-300"
+                            : report.riskLevel === "Moyenne"
+                            ? "bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border-amber-300"
+                            : "bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border-emerald-300"
+                        }`}
+                      >
+                        Niveau Risque : {report.riskLevel || "Faible"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Summary badges for this student */}
+                  <div className="flex flex-wrap gap-2 text-[10px] font-bold font-mono">
+                    <span className="px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800 flex items-center space-x-1">
+                      <span>⚡ Switchs Onglet :</span>
+                      <span>{tabEvents.length}</span>
+                    </span>
+                    <span className="px-2 py-1 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-800 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800 flex items-center space-x-1">
+                      <span>🖥️ Sorties Plein Écran :</span>
+                      <span>{fullscreenEvents.length}</span>
+                    </span>
+                    <span className="px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800 flex items-center space-x-1">
+                      <span>👁️ Pertes Focus Fenêtre :</span>
+                      <span>{blurEvents.length}</span>
+                    </span>
+                  </div>
+
+                  {/* Real-time event log for this student */}
+                  {eventsList.length === 0 ? (
+                    <p className="text-[11px] text-slate-400 italic bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                      ✅ Aucune alerte de triche ou de perte de focus détectée pour cet étudiant.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {eventsList.map((ev: any, idx: number) => {
+                        let icon = "⚡";
+                        let label = "Alerte de Focus";
+                        let badgeClass = "bg-amber-100 text-amber-800 border-amber-200";
+
+                        if (ev.eventType === "TAB_SWITCH" || ev.eventType === "TAB_CHANGED") {
+                          icon = "⚡";
+                          label = "Changement d'onglet";
+                          badgeClass = "bg-amber-100 text-amber-800 border-amber-200";
+                        } else if (ev.eventType === "FULLSCREEN_EXIT") {
+                          icon = "🖥️";
+                          label = "Sortie du Mode Plein Écran";
+                          badgeClass = "bg-rose-100 text-rose-800 border-rose-200";
+                        } else if (ev.eventType === "WINDOW_BLUR") {
+                          icon = "👁️";
+                          label = "Perte de focus de la fenêtre";
+                          badgeClass = "bg-indigo-100 text-indigo-800 border-indigo-200";
+                        } else if (ev.eventType === "COPY_ATTEMPT" || ev.eventType === "PASTE_ATTEMPT") {
+                          icon = "📋";
+                          label = ev.eventType === "COPY_ATTEMPT" ? "Tentative de Copie" : "Tentative de Collage";
+                          badgeClass = "bg-purple-100 text-purple-800 border-purple-200";
+                        }
+
+                        const evTime = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString("fr-FR") : "Récent";
+
+                        return (
+                          <div
+                            key={ev.id || idx}
+                            className="text-xs bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${badgeClass}`}>
+                                {icon} {label}
+                              </span>
+                              <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">{ev.details || "Événement d'alerte sur l'interface"}</span>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-400 shrink-0">{evTime}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -751,6 +990,8 @@ export default function App() {
   const [aiExplanationText, setAiExplanationText] = useState<string>("");
   const [loadingAiExplanation, setLoadingAiExplanation] = useState<boolean>(false);
   const [loadingSubReport, setLoadingSubReport] = useState<boolean>(false);
+  const [studentCommentText, setStudentCommentText] = useState<string>("");
+  const [savingStudentComment, setSavingStudentComment] = useState<boolean>(false);
 
   // Toast Alerts
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
@@ -1173,12 +1414,14 @@ export default function App() {
     setSelectedSubReport(null);
     setSelectedSubReportQuestions([]);
     setAiExplanationText("");
+    setStudentCommentText("");
     try {
       const res = await fetch(`/api/submissions/${sub.id}/details`);
       if (res.ok) {
         const data = await res.json();
         setSelectedSubReport(data.submission);
         setSelectedSubReportQuestions(data.questions || []);
+        setStudentCommentText(data.submission?.studentComment || "");
         
         // Auto-fetch tutor AI explanation right away
         handleFetchAiExplanation(sub.id);
@@ -1197,6 +1440,28 @@ export default function App() {
       triggerToast("Erreur de réseau lors de la récupération du rapport.", "error");
     } finally {
       setLoadingSubReport(false);
+    }
+  };
+
+  const handleSaveStudentComment = async () => {
+    if (!selectedSubReport) return;
+    setSavingStudentComment(true);
+    try {
+      const res = await fetch(`/api/submissions/${selectedSubReport.id}/student-comment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentComment: studentCommentText })
+      });
+      if (res.ok) {
+        setSelectedSubReport((prev: any) => prev ? { ...prev, studentComment: studentCommentText } : null);
+        triggerToast("Vos remarques sur l'épreuve ont été enregistrées avec succès.", "success");
+      } else {
+        triggerToast("Impossible d'enregistrer vos remarques.", "error");
+      }
+    } catch {
+      triggerToast("Erreur de connexion au serveur.", "error");
+    } finally {
+      setSavingStudentComment(false);
     }
   };
 
@@ -2516,6 +2781,8 @@ export default function App() {
                       {activeQuizQuestions.map((q, idx) => {
                         const answered = isQuestionAnswered(q);
                         const isActive = idx === currentQuestionIndex;
+                        const isEssay = q.type === "essay";
+
                         return (
                           <button
                             key={q.id}
@@ -2524,7 +2791,7 @@ export default function App() {
                               setSlideDirection(idx > currentQuestionIndex ? 1 : -1);
                               setCurrentQuestionIndex(idx);
                             }}
-                            className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-center transition-all duration-150 transform hover:scale-105 hover:shadow-xs active:scale-95 cursor-pointer ${
+                            className={`relative flex flex-col items-center justify-center p-2 rounded-xl border text-center transition-all duration-150 transform hover:scale-105 hover:shadow-xs active:scale-95 cursor-pointer ${
                               isActive
                                 ? "bg-indigo-50 border-indigo-400 text-indigo-900 ring-2 ring-indigo-200 font-extrabold"
                                 : answered
@@ -2532,14 +2799,34 @@ export default function App() {
                                   : "bg-white border-slate-200 text-slate-500 hover:bg-slate-100"
                             }`}
                           >
+                            {/* Type Indicator Pastille Badge (Essay vs Auto) */}
+                            {isEssay ? (
+                              <span className="absolute -top-1.5 -right-1.5 px-1 py-0.2 text-[8px] font-black rounded-full bg-purple-600 text-white shadow-xs border border-white" title="Question de type Essai (Correction Manuelle)">
+                                ✍️
+                              </span>
+                            ) : (
+                              <span className="absolute -top-1.5 -right-1.5 px-1 py-0.2 text-[8px] font-black rounded-full bg-blue-500 text-white shadow-xs border border-white" title="Question Automatique (Auto-Correction)">
+                                ⚡
+                              </span>
+                            )}
+
                             <span className="text-[10px] font-mono font-bold leading-none">Q{idx + 1}</span>
-                            <div className="mt-1.5">
+                            
+                            <div className="mt-1 flex items-center space-x-1">
                               {answered ? (
-                                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-xs shadow-emerald-200" />
+                                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-xs shadow-emerald-200" title="Réponse enregistrée" />
                               ) : (
-                                <span className="flex h-2.5 w-2.5 rounded-full bg-slate-300" />
+                                <span className="flex h-2.5 w-2.5 rounded-full bg-slate-300" title="Non répondu" />
                               )}
                             </div>
+
+                            <span className={`text-[8px] font-bold mt-1 px-1 rounded ${
+                              isEssay 
+                                ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300" 
+                                : "bg-slate-100 text-slate-600"
+                            }`}>
+                              {isEssay ? "Essai" : "Auto"}
+                            </span>
                           </button>
                         );
                       })}
@@ -2557,6 +2844,28 @@ export default function App() {
                         <span className="font-mono font-bold text-rose-500">
                           {activeQuizQuestions.filter((q) => !isQuestionAnswered(q)).length}
                         </span>
+                      </div>
+
+                      {/* Question type breakdown legend */}
+                      <div className="p-2.5 bg-slate-100/70 rounded-xl space-y-1 text-[10px] font-medium border border-slate-200/50">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center space-x-1.5 text-purple-800 font-bold">
+                            <span className="w-2 h-2 rounded-full bg-purple-600 inline-block"></span>
+                            <span>✍️ Essai (Rédaction) :</span>
+                          </span>
+                          <span className="font-mono font-extrabold text-purple-900">
+                            {activeQuizQuestions.filter((q) => q.type === "essay").length}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center space-x-1.5 text-blue-800 font-bold">
+                            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
+                            <span>⚡ Automatiques (QCM, etc.) :</span>
+                          </span>
+                          <span className="font-mono font-extrabold text-blue-900">
+                            {activeQuizQuestions.filter((q) => q.type !== "essay").length}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2886,7 +3195,7 @@ export default function App() {
 
               {/* Detailed Result Card after finishing quiz */}
               {selectedSubReport && (
-                <div id="submission-detail-card" className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm relative space-y-6">
+                <div id="student-detail-card" className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm relative space-y-6">
                   {/* Exit report */}
                   <button
                     onClick={() => {
@@ -3093,6 +3402,47 @@ export default function App() {
                       </div>
                     </div>
 
+                  </div>
+
+                  {/* STUDENT FREE-TEXT COMMENT FIELD (student-detail-card requirement) */}
+                  <div className="border-t border-slate-100 pt-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="p-2 bg-amber-50 text-amber-700 rounded-xl border border-amber-200/60">
+                          <MessageSquare className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h5 className="text-xs font-bold text-slate-900">Remarques & Difficultés Épreuve (Étudiant)</h5>
+                          <p className="text-[11px] text-slate-500">
+                            Consignez ci-dessous vos remarques personnelles ou difficultés rencontrées pendant l'épreuve.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <textarea
+                        rows={3}
+                        value={studentCommentText}
+                        onChange={(e) => setStudentCommentText(e.target.value)}
+                        placeholder="Ex : Problème de gestion du temps sur la question d'essai 2, énoncé ambigu sur le calcul d'intégrale..."
+                        className="w-full text-xs p-3 rounded-2xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50/50 resize-y text-slate-800"
+                      />
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {studentCommentText.length} caractères • Enregistré dans votre rapport
+                        </span>
+                        <button
+                          type="button"
+                          disabled={savingStudentComment}
+                          onClick={handleSaveStudentComment}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{savingStudentComment ? "Enregistrement..." : "Enregistrer mes remarques"}</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

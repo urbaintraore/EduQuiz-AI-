@@ -157,6 +157,7 @@ export interface Submission {
   submittedAt: string;
   gradedAt: string | null;
   essayFeedbacks?: Record<string, { score: number; comment: string }>; // questionId -> teacher feedback
+  studentComment?: string;
 }
 
 export interface CourseWithDetails extends Course {

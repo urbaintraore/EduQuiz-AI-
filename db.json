@@ -71,6 +71,14 @@
       "role": "student",
       "university": "Université d'études",
       "schoolClass": "Promotion Générale"
+    },
+    {
+      "id": "usr_jm5ja1peo",
+      "email": "test@example.com",
+      "password": "123",
+      "role": "student",
+      "university": "Université d'études",
+      "schoolClass": "Promotion Générale"
     }
   ],
   "courses": [
@@ -105,6 +113,16 @@
       "studentId": "usr_ep1uvmwur",
       "courseId": "crs_15u5d7hoj",
       "enrolledAt": "2026-07-22T16:33:13.107Z"
+    },
+    {
+      "studentId": "usr_jm5ja1peo",
+      "courseId": "crs_ia",
+      "enrolledAt": "2026-07-23T10:37:05.692Z"
+    },
+    {
+      "studentId": "usr_jm5ja1peo",
+      "courseId": "crs_15u5d7hoj",
+      "enrolledAt": "2026-07-23T10:37:05.692Z"
     }
   ],
   "exams": [

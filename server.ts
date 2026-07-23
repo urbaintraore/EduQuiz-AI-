@@ -1975,7 +1975,7 @@ app.post("/api/exams/:examId/submit", (req, res) => {
     return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
   }
   const { examId } = req.params;
-  const { studentId, answers } = req.body; // Record<questionId, any>
+  const { studentId, answers, studentComment } = req.body; // Record<questionId, any>
 
   if (!studentId || !answers) {
     return res.status(400).json({ error: "Champs obligatoires manquants." });
@@ -2082,7 +2082,8 @@ app.post("/api/exams/:examId/submit", (req, res) => {
     score: hasEssay ? null : finalScore, // null signals grading pending
     submittedAt: new Date().toISOString(),
     gradedAt: hasEssay ? null : new Date().toISOString(),
-    essayFeedbacks: hasEssay ? essayFeedbacks : undefined
+    essayFeedbacks: hasEssay ? essayFeedbacks : undefined,
+    studentComment: studentComment || ""
   };
 
   db.submissions.push(newSubmission);
@@ -2498,6 +2499,24 @@ app.get("/api/submissions/:submissionId/details", (req, res) => {
     exam,
     questions
   });
+});
+
+// Update student comment / difficulties on submission
+app.post("/api/submissions/:submissionId/student-comment", (req, res) => {
+  if (!req.user || !["admin","student"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
+  const { submissionId } = req.params;
+  const { studentComment } = req.body;
+  const db = getDB();
+
+  const subIdx = db.submissions.findIndex(s => s.id === submissionId);
+  if (subIdx === -1) return res.status(404).json({ error: "Soumission introuvable" });
+
+  db.submissions[subIdx].studentComment = studentComment || "";
+  saveDB(db);
+
+  res.json({ success: true, submission: db.submissions[subIdx] });
 });
 
 // Generate tutoring explanation using Gemini on student mistakes
@@ -3130,18 +3149,7 @@ app.delete("/api/admin/exams/:id", (req, res) => {
   res.json({ success: true });
 });
 
-// Robust Error Handling Middleware to catch any unexpected runtime crashes
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("🚨 UNHANDLED SERVER EXCEPTION DETECTED:", err);
-  res.status(500).json({
-    error: "Une erreur interne du serveur est survenue.",
-    message: err?.message || String(err),
-    stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
-  });
-});
-
-// --- CLIENT-SIDE VITE PIPELINE AND DEV RUNNER ---
-
+// Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -3160,7 +3168,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// API 404 Fallback - ensures unhandled API routes return JSON, not HTML from Vite SPA fallback
+// API 404 Fallback - ensures unhandled API routes return JSON 404, never HTML
 app.use("/api", (req, res) => {
   res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
 });
@@ -3169,13 +3177,18 @@ app.use("/api", (req, res) => {
 const isCompiled = process.argv[1] && process.argv[1].endsWith("server.cjs");
 const isProductionEnv = process.env.NODE_ENV === "production" || process.env.VERCEL || isCompiled;
 
-// Register production static files synchronously at load time for robust serverless performance
+// Register production static files synchronously at load time
 if (isProductionEnv) {
   const distPath = path.join(process.cwd(), "dist");
-  app.use(express.static(distPath));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
-  });
+  if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api")) {
+        return next();
+      }
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
 }
 
 const startServer = async () => {
@@ -3188,6 +3201,20 @@ const startServer = async () => {
     });
     app.use(vite.middlewares);
   }
+
+  // Robust Global Error Handling Middleware - MUST be attached AFTER all routes and middlewares
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("🚨 UNHANDLED SERVER EXCEPTION DETECTED:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    const status = err.status || err.statusCode || 500;
+    res.status(status).json({
+      error: err?.message || "Une erreur interne du serveur est survenue.",
+      status,
+      stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
+    });
+  });
 
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
