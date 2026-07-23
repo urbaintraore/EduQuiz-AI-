@@ -835,6 +835,11 @@ app.post("/api/extract-text", upload.single("file"), async (req, res) => {
 import jwt from "jsonwebtoken";
 
 const JWT_SECRET = process.env.JWT_SECRET || "eduquiz_super_secret_key_2026";
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️ [Auth] JWT_SECRET environment variable is not defined; using fallback security key.");
+} else {
+  console.log("🔒 [Auth] JWT_SECRET environment variable detected and initialized.");
+}
 
 function jwtSign(payload: object, options?: jwt.SignOptions): string {
   const signer = (jwt as any).sign || (jwt as any).default?.sign || (jwt as any).default;
