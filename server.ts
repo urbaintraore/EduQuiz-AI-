@@ -1392,6 +1392,282 @@ app.delete("/api/questions/:id", (req, res) => {
 
 // --- CORE AI MODULE: AUTOMATIC QUIZ GENERATION VIA GEMINI ---
 
+app.post("/api/courses/:courseId/generate-from-chapters", async (req, res) => {
+  if (!req.user || !["admin","teacher"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
+  }
+  const { courseId } = req.params;
+  const { title, chaptersText, questionCount, difficulty, duration } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ error: "Le titre du quiz est obligatoire." });
+  }
+  if (!chaptersText) {
+    return res.status(400).json({ error: "Les chapitres ou notions clés à aborder sont obligatoires." });
+  }
+
+  const db = getDB();
+  const course = db.courses.find(c => c.id === courseId);
+  if (!course) return res.status(404).json({ error: "Cours introuvable." });
+
+  const examId = "exm_" + Math.random().toString(36).substring(2, 11);
+  const newExam = {
+    id: examId,
+    courseId,
+    title,
+    duration: parseInt(duration) || 30,
+    startDate: new Date().toISOString(),
+    status: "draft" as const,
+    subjectText: `Généré automatiquement par l'IA d'après les chapitres :\n${chaptersText}`,
+    solutionText: "Généré automatiquement par l'IA d'après les chapitres d'étude.",
+    gradingScaleText: "Sur 20 points",
+    createdAt: new Date().toISOString(),
+    description: `Quiz d'évaluation automatique portant sur : ${chaptersText}. Niveau: ${difficulty}.`,
+    attemptsMax: 1,
+    maxGrade: 20,
+    passingGrade: 10,
+    category: "Génération IA",
+    shuffleQuestions: true,
+    shuffleAnswers: true,
+    questionsPerPage: "all" as const,
+    navigationMethod: "free" as const,
+    endDate: "",
+    password: "",
+    accessRestriction: "",
+    reviewOptions: { showResults: true, immediateFeedback: true }
+  };
+
+  const aiClient = getGeminiClient();
+
+  if (!aiClient) {
+    // Premium Simulated Fallback Output when API Key isn't configured
+    console.log("No API key available. Running high-fidelity offline backup generator for chapters...");
+    const lines = chaptersText.split(/[,\n;.]+/).map((l: string) => l.trim()).filter(Boolean);
+    const keywords = lines.length > 0 ? lines : ["Général", "Notions Fondamentales", "Méthodes"];
+    
+    const mockedGenerated = [];
+    const count = parseInt(questionCount) || 5;
+    
+    for (let i = 0; i < count; i++) {
+      const kw = keywords[i % keywords.length];
+      const type = i % 5 === 0 ? "mcq" : i % 5 === 1 ? "true_false" : i % 5 === 2 ? "matching" : i % 5 === 3 ? "short_answer" : "cloze";
+      
+      if (type === "mcq") {
+        mockedGenerated.push({
+          id: "q_" + Math.random().toString(36).substring(2, 11),
+          examId,
+          type: "mcq" as const,
+          statement: `[Simulation IA] Concernant la thématique "${kw}", quelle est la proposition qui caractérise le mieux ce concept ?`,
+          options: [`Définition exacte de ${kw}`, `Option alternative incorrecte`, `Contre-sens théorique`, `Raisonnement erroné`],
+          correctAnswer: `Définition exacte de ${kw}`,
+          points: 4,
+          explanation: `La proposition correcte définit précisément les limites et les implications de ${kw} dans le cadre universitaire.`
+        });
+      } else if (type === "true_false") {
+        mockedGenerated.push({
+          id: "q_" + Math.random().toString(36).substring(2, 11),
+          examId,
+          type: "true_false" as const,
+          statement: `[Simulation IA] Selon le cours de "${course.title}", l'aspect "${kw}" est considéré comme indispensable lors de la modélisation de solutions adaptées.`,
+          correctAnswer: "true",
+          points: 4,
+          explanation: `Vrai. Les chapitres d'étude mettent l'accent sur l'importance cruciale de la notion de ${kw}.`
+        });
+      } else if (type === "matching") {
+        mockedGenerated.push({
+          id: "q_" + Math.random().toString(36).substring(2, 11),
+          examId,
+          type: "matching" as const,
+          statement: `[Simulation IA] Associez chaque terme clé lié à "${kw}" à sa définition ou son rôle associé.`,
+          options: [`Concept central de ${kw}`, `Mécanisme de ${kw}`, `Cas limite de ${kw}`],
+          matchingTargets: [`Rôle principal ou définition`, `Fonctionnement opérationnel`, `Exception de cas d'usage`],
+          correctAnswer: `Associations correctes pour le domaine ${kw}.`,
+          points: 4,
+          explanation: `Cet exercice permet de consolider l'association des concepts de ${kw} appris dans le chapitre.`
+        });
+      } else if (type === "short_answer") {
+        mockedGenerated.push({
+          id: "q_" + Math.random().toString(36).substring(2, 11),
+          examId,
+          type: "short_answer" as const,
+          statement: `[Simulation IA] Quel terme technique désigne le mécanisme principal de "${kw}" ? (Réponse attendue : la clé)`,
+          correctAnswer: kw.toLowerCase().replace(/\s+/g, ""),
+          points: 4,
+          explanation: `Le mot-clé principal de cette partie du cours est précisément : ${kw}.`
+        });
+      } else {
+        mockedGenerated.push({
+          id: "q_" + Math.random().toString(36).substring(2, 11),
+          examId,
+          type: "cloze" as const,
+          statement: `[Simulation IA] Le déploiement de la solution pour "${kw}" requiert un niveau {élevé|moyen|faible} de rigueur.`,
+          correctAnswer: "élevé",
+          points: 4,
+          explanation: `Le niveau de rigueur élevé est indispensable pour valider l'implémentation de ${kw}.`
+        });
+      }
+    }
+
+    db.exams.push(newExam);
+    db.questions.push(...mockedGenerated);
+    saveDB(db);
+
+    return res.status(201).json({
+      message: "Quiz créé et questions simulées localement avec succès ! (Aucune clé GEMINI_API_KEY configurée)",
+      exam: newExam,
+      questions: mockedGenerated
+    });
+  }
+
+  // Real Gemini Call using gemini-3.6-flash with structured output scheme
+  try {
+    const userPrompt = `
+Génère un Quiz d'évaluation académique de type Moodle pour le cours "${course.title}".
+Titre du Quiz : "${title}"
+Chapitres et notions clés à aborder absolument :
+---
+${chaptersText}
+---
+Niveau de difficulté ciblé : ${difficulty}
+Nombre de questions attendu : ${questionCount} questions de types variés.
+
+Génère une liste de questions variées et fidèles de type Moodle basées sur ces chapitres.
+Tu dois distribuer les questions de manière équilibrée sur les différents chapitres spécifiés.
+Renseigne les points de chaque question de manière logique (par exemple 2 à 4 points par question).
+Chaque question doit être de l'un des types suivants :
+- Des questions QCM (type 'mcq') avec un tableau 'options' de 4 choix (la bonne réponse doit être l'une de ces options).
+- Des questions Vrai / Faux (type 'true_false') avec 'true' ou 'false' en correctAnswer.
+- Des questions d'Appariement (type 'matching') où 'options' contient les éléments de gauche à associer (par ex: ['A', 'B', 'C']), et 'matchingTargets' contient les cibles correspondantes de droite (par ex: ['1', '2', '3']). L'ordre doit correspondre exactement dans les deux tableaux.
+- Des réponses courtes (type 'short_answer') réclamant un mot exact ou une expression courte en correctAnswer.
+- Des questions numériques (type 'numerical') acceptant un nombre brut en string correctAnswer.
+- Des questions à trous Cloze (type 'cloze') où le texte contient des choix, par exemple: "La Terre est une {planète|étoile|galaxie}." avec correctAnswer égal à "planète".
+- Des questions de composition ouverte (type 'essay') pour lesquelles l'étudiant doit rédiger un paragraphe.
+`;
+
+    const result = await aiClient.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents: userPrompt,
+      config: {
+        systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de concevoir un Quiz Moodle parfait basé sur des chapitres d'étude. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            questions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  type: {
+                    type: Type.STRING,
+                    description: "Le type de question: 'mcq' | 'true_false' | 'matching' | 'short_answer' | 'numerical' | 'cloze' | 'essay' | 'description'"
+                  },
+                  statement: {
+                    type: Type.STRING,
+                    description: "L'énoncé de la question de manière claire et adaptée"
+                  },
+                  options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Facultatif. Tableau de choix pour QCM ou termes de gauche à associer pour 'matching'."
+                  },
+                  matchingTargets: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Facultatif. Tableau de cibles de droite correspondantes à associer pour 'matching' (dans l'ordre correct)."
+                  },
+                  correctAnswer: {
+                    type: Type.STRING,
+                    description: "La bonne réponse exacte. Vrai/faux: 'true'/'false'. MCQ: l'option textuelle correspondante exacte. Matching: un descriptif d'association. Cloze: la bonne option. Question ouverte: directives de réponses clefs."
+                  },
+                  points: {
+                    type: Type.NUMBER,
+                    description: "Points alloués à la question."
+                  },
+                  explanation: {
+                    type: Type.STRING,
+                    description: "Explication ou justification pédagogique issue du corrigé officiel."
+                  }
+                },
+                required: ["type", "statement", "correctAnswer", "points", "explanation"]
+              }
+            }
+          },
+          required: ["questions"]
+        }
+      }
+    });
+
+    const textOutput = result.text;
+    if (!textOutput) {
+      throw new Error("Gemini a retourné une réponse vide.");
+    }
+
+    const cleanJson = textOutput.trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
+    let parsedObj: any = {};
+    try {
+      parsedObj = JSON.parse(cleanJson);
+    } catch (parseErr) {
+      console.warn("Direct JSON parse failed, attempting fallback substring extraction...", parseErr);
+      const firstBracket = cleanJson.indexOf('[');
+      const lastBracket = cleanJson.lastIndexOf(']');
+      const firstBrace = cleanJson.indexOf('{');
+      const lastBrace = cleanJson.lastIndexOf('}');
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        parsedObj = JSON.parse(cleanJson.substring(firstBracket, lastBracket + 1));
+      } else if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        parsedObj = JSON.parse(cleanJson.substring(firstBrace, lastBrace + 1));
+      }
+    }
+
+    const parsedQuestions = Array.isArray(parsedObj) ? parsedObj : (parsedObj.questions || []);
+
+    const questionsToInsert = parsedQuestions.map((q: any) => ({
+      ...q,
+      id: "q_" + Math.random().toString(36).substring(2, 11),
+      examId,
+      options: q.options || [],
+      matchingTargets: q.matchingTargets || []
+    }));
+
+    db.exams.push(newExam);
+    db.questions.push(...questionsToInsert);
+    saveDB(db);
+
+    res.status(201).json({
+      message: "Quiz créé et questions générées via l'IA avec succès !",
+      exam: newExam,
+      questions: questionsToInsert
+    });
+
+  } catch (error: any) {
+    console.error("Gemini Chapters generation error:", error);
+    // Fallback if API fails
+    const fallbackLines = chaptersText.split(/[,\n;.]+/).map((l: string) => l.trim()).filter(Boolean);
+    const kw = fallbackLines[0] || "Général";
+    const fallbackQuestion = {
+      id: "q_" + Math.random().toString(36).substring(2, 11),
+      examId,
+      type: "mcq" as const,
+      statement: `Veuillez définir le concept clé de: ${kw}`,
+      options: ["Option correcte", "Alternative B", "Alternative C", "Alternative D"],
+      correctAnswer: "Option correcte",
+      points: 20,
+      explanation: `Explication pédagogique générée automatiquement sur le chapitre ${kw}.`
+    };
+
+    db.exams.push(newExam);
+    db.questions.push(fallbackQuestion);
+    saveDB(db);
+
+    res.status(201).json({
+      message: "Le quiz a été créé, mais l'IA a rencontré une limite réseau. Une question de secours a été insérée.",
+      exam: newExam,
+      questions: [fallbackQuestion]
+    });
+  }
+});
+
 app.post("/api/exams/:examId/generate", async (req, res) => {
   if (!req.user || !["admin","teacher"].includes(req.user.role)) {
     return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
@@ -2889,8 +3165,12 @@ app.use("/api", (req, res) => {
   res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
 });
 
+// Determine if we are running the compiled production bundle
+const isCompiled = process.argv[1] && process.argv[1].endsWith("server.cjs");
+const isProductionEnv = process.env.NODE_ENV === "production" || process.env.VERCEL || isCompiled;
+
 // Register production static files synchronously at load time for robust serverless performance
-if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+if (isProductionEnv) {
   const distPath = path.join(process.cwd(), "dist");
   app.use(express.static(distPath));
   app.get("*", (req, res) => {
@@ -2899,11 +3179,8 @@ if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
 }
 
 const startServer = async () => {
-  // Warm up Firestore database state
-  await initializeDatabaseState();
-
   // Vite setup for development asset compiling & livereload (local development only)
-  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+  if (!isProductionEnv) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2918,6 +3195,9 @@ const startServer = async () => {
       console.log(`🔗 Running dev server at http://localhost:${PORT}`);
     });
   }
+
+  // Warm up Firestore database state in the background without blocking the port binding
+  initializeDatabaseState().catch(err => console.error("Error during background DB initialization:", err));
 };
 
 // In Vercel serverless environments, we export 'app' without calling 'startServer()' synchronously.

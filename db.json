@@ -47,6 +47,30 @@
       "role": "teacher",
       "university": "Université d'études",
       "schoolClass": ""
+    },
+    {
+      "id": "usr_0gd8ogjf1",
+      "email": "enseignant3@uvbf.bf",
+      "password": "123456",
+      "role": "teacher",
+      "university": "Université d'études",
+      "schoolClass": ""
+    },
+    {
+      "id": "usr_3c5fewrzt",
+      "email": "enseignantifoad@uvbf.bf",
+      "password": "123456",
+      "role": "teacher",
+      "university": "Université d'études",
+      "schoolClass": ""
+    },
+    {
+      "id": "usr_ep1uvmwur",
+      "email": "test@test.com",
+      "password": "password",
+      "role": "student",
+      "university": "Université d'études",
+      "schoolClass": "Promotion Générale"
     }
   ],
   "courses": [
@@ -56,6 +80,14 @@
       "title": "Algorithmique & Intelligence Artificielle 101",
       "description": "Introduction aux concepts de base de l'informatique théorique et de la recherche IA.",
       "code": "IA2026"
+    },
+    {
+      "id": "crs_15u5d7hoj",
+      "teacherId": "usr_0gd8ogjf1",
+      "title": "Calcul matriciel",
+      "description": "Opérations sur les matrices\nDiagonalisation",
+      "category": "Masters 1 25-26",
+      "code": "BKP5QC"
     }
   ],
   "enrollments": [
@@ -63,6 +95,16 @@
       "studentId": "usr_student",
       "courseId": "crs_ia",
       "enrolledAt": "2026-06-26T10:06:50.437Z"
+    },
+    {
+      "studentId": "usr_ep1uvmwur",
+      "courseId": "crs_ia",
+      "enrolledAt": "2026-07-22T16:33:13.107Z"
+    },
+    {
+      "studentId": "usr_ep1uvmwur",
+      "courseId": "crs_15u5d7hoj",
+      "enrolledAt": "2026-07-22T16:33:13.107Z"
     }
   ],
   "exams": [

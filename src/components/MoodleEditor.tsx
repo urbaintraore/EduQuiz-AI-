@@ -28,7 +28,7 @@ export default function MoodleEditor({
   darkMode
 }: MoodleEditorProps) {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<"quiz_setup" | "questions_list" | "question_bank">("quiz_setup");
+  const [activeTab, setActiveTab] = useState<"quiz_setup" | "auto_generator" | "questions_list" | "question_bank">("quiz_setup");
 
   // Selection states
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(activeCourse || courses[0] || null);
@@ -78,6 +78,14 @@ export default function MoodleEditor({
   const [quizSolution, setQuizSolution] = useState("");
   const subjectFileRef = useRef<HTMLInputElement>(null);
   const solutionFileRef = useRef<HTMLInputElement>(null);
+
+  // Automatic Quiz Generator states
+  const [genTitle, setGenTitle] = useState("");
+  const [genChaptersText, setGenChaptersText] = useState("");
+  const [genQuestionCount, setGenQuestionCount] = useState("10");
+  const [genDifficulty, setGenDifficulty] = useState<"Facile" | "Moyen" | "Difficile">("Moyen");
+  const [genDuration, setGenDuration] = useState("30");
+  const [isGeneratingChapters, setIsGeneratingChapters] = useState(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string>>, extractionType: "subject" | "solution" = "subject") => {
     const file = e.target.files?.[0];
@@ -281,6 +289,94 @@ export default function MoodleEditor({
     setQuizSubject("");
     setQuizSolution("");
     setExamQuestions([]);
+  };
+
+  const [aiGenerating, setAiGenerating] = useState(false);
+
+  const handleAiGeneration = async () => {
+    if (!selectedExam) {
+      triggerToast("Veuillez d'abord configurer et enregistrer le Quiz (Étape 1) avant de générer des questions.", "error");
+      return;
+    }
+    setAiGenerating(true);
+    triggerToast("Analyse des documents sémantiques par l'IA en cours... (Génération de questions complexes Moodle)", "info");
+
+    try {
+      const res = await fetch(`/api/exams/${selectedExam.id}/generate`, {
+        method: "POST"
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setExamQuestions(data.questions || []);
+        triggerToast(data.message || "Génération réussie !", "success");
+        // refresh selectedExam questions or update global exams list
+        const updatedExam = { ...selectedExam, questions: data.questions || [] };
+        setSelectedExam(updatedExam);
+        onUpdateExams(exams.map(e => e.id === selectedExam.id ? updatedExam : e));
+      } else {
+        triggerToast(data.error || "L'IA a échoué à structurer l'examen.", "error");
+      }
+    } catch (e) {
+      triggerToast("Une erreur critique est survenue lors de l'appel IA.", "error");
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const handleGenerateFromChapters = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCourse) {
+      triggerToast("Veuillez sélectionner un cours d'abord.", "error");
+      return;
+    }
+    if (!genTitle.trim()) {
+      triggerToast("Veuillez saisir un titre pour le quiz.", "error");
+      return;
+    }
+    if (!genChaptersText.trim()) {
+      triggerToast("Veuillez renseigner les chapitres à aborder.", "error");
+      return;
+    }
+
+    setIsGeneratingChapters(true);
+    triggerToast("Génération automatique du Quiz Moodle par l'IA en cours d'après vos chapitres...", "info");
+
+    try {
+      const res = await fetch(`/api/courses/${selectedCourse.id}/generate-from-chapters`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: genTitle,
+          chaptersText: genChaptersText,
+          questionCount: genQuestionCount,
+          difficulty: genDifficulty,
+          duration: genDuration
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        triggerToast(data.message || "Quiz généré avec succès !", "success");
+        // Update selection and list
+        setSelectedExam(data.exam);
+        setExamQuestions(data.questions || []);
+        onUpdateExams([data.exam, ...exams]);
+        
+        // Clear fields
+        setGenTitle("");
+        setGenChaptersText("");
+        
+        // Auto transition to Question List Tab
+        setActiveTab("questions_list");
+      } else {
+        triggerToast(data.error || "La génération a échoué.", "error");
+      }
+    } catch (err) {
+      triggerToast("Erreur lors de la communication avec le serveur.", "error");
+    } finally {
+      setIsGeneratingChapters(false);
+    }
   };
 
   const handleCreateOrUpdateQuiz = async (e: React.FormEvent, targetStatus?: "draft" | "published") => {
@@ -846,6 +942,18 @@ export default function MoodleEditor({
         </button>
 
         <button
+          onClick={() => { setActiveTab("auto_generator"); setIsCreatingQuestion(false); }}
+          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer ${
+            activeTab === "auto_generator"
+              ? "bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200 dark:border-slate-700"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800"
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" />
+          <span>✨ Générateur IA par Chapitres</span>
+        </button>
+
+        <button
           onClick={() => { setActiveTab("questions_list"); setIsCreatingQuestion(false); }}
           className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer ${
             activeTab === "questions_list"
@@ -1180,13 +1288,142 @@ export default function MoodleEditor({
                 <Archive className="w-4 h-4" />
                 <span>Enregistrer comme brouillon</span>
               </button>
+            </div>
+          </form>
+        )}
+
+        {/* TAB: AUTOMATIC AI QUIZ GENERATOR BY CHAPTERS */}
+        {activeTab === "auto_generator" && (
+          <form onSubmit={handleGenerateFromChapters} className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-6">
+            <div className="bg-gradient-to-r from-indigo-50 to-indigo-100/50 dark:from-indigo-950/20 dark:to-indigo-900/10 p-5 rounded-2xl border border-indigo-100/70 dark:border-indigo-900/30 flex items-start gap-4">
+              <div className="bg-indigo-600 text-white p-2.5 rounded-xl">
+                <Sparkles className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-indigo-950 dark:text-indigo-200 uppercase tracking-wider font-mono">
+                  Générateur de Quiz Automatique de type Moodle
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                  Saisissez simplement le titre du quiz et la liste des chapitres/notions clés à aborder. L'IA concevra instantanément un jeu de questions variées (QCM, Vrai/Faux, Appariement, Réponses Courtes, Cloze) adapté au niveau demandé.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Titre du Quiz d'évaluation *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={genTitle}
+                    onChange={(e) => setGenTitle(e.target.value)}
+                    placeholder="Ex: Évaluation de Graphes et Algorithmes"
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Chapitres et notions clés à aborder *
+                  </label>
+                  <textarea
+                    required
+                    value={genChaptersText}
+                    onChange={(e) => setGenChaptersText(e.target.value)}
+                    placeholder="Décrivez les chapitres à couvrir par l'IA. Ex :&#10;- Chapitre 1: Définition d'un arbre binaire de recherche&#10;- Chapitre 2: Parcours en largeur (BFS) et profondeur (DFS)&#10;- Chapitre 3: Complexité algorithmique temporelle"
+                    rows={6}
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    Séparez vos chapitres ou concepts par des tirets ou des virgules.
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-4 bg-slate-50/50 dark:bg-slate-950/20 p-5 rounded-2xl border border-slate-100 dark:border-slate-850">
+                <h4 className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider pb-2 border-b border-slate-200 dark:border-slate-800">
+                  Paramètres de Génération Pédagogique
+                </h4>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Nombre de questions à générer
+                  </label>
+                  <select
+                    value={genQuestionCount}
+                    onChange={(e) => setGenQuestionCount(e.target.value)}
+                    className="w-full text-xs px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="5">5 questions (Rapide)</option>
+                    <option value="10">10 questions (Recommandé)</option>
+                    <option value="15">15 questions (Intermédiaire)</option>
+                    <option value="20">20 questions (Examen complet)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Niveau de difficulté ciblé
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["Facile", "Moyen", "Difficile"] as const).map((diff) => (
+                      <button
+                        key={diff}
+                        type="button"
+                        onClick={() => setGenDifficulty(diff)}
+                        className={`py-2 px-3 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                          genDifficulty === diff
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
+                            : "bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-850 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-900"
+                        }`}
+                      >
+                        {diff}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Durée estimée de composition (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="360"
+                    value={genDuration}
+                    onChange={(e) => setGenDuration(e.target.value)}
+                    className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 font-semibold"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-4 flex justify-end">
               <button
                 type="submit"
-                onClick={(e) => handleCreateOrUpdateQuiz(e, "published")}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-6 rounded-xl shadow-md transition duration-150 flex items-center space-x-2 cursor-pointer"
+                disabled={isGeneratingChapters}
+                className={`w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-3 px-8 rounded-xl shadow-md transition duration-150 flex items-center justify-center space-x-2.5 cursor-pointer ${
+                  isGeneratingChapters ? "opacity-75 cursor-not-allowed" : ""
+                }`}
               >
-                <Save className="w-4 h-4" />
-                <span>{selectedExam ? "Sauvegarder & Publier" : "Créer & Publier le Quiz"}</span>
+                {isGeneratingChapters ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span>Génération par l'IA en cours...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                    <span>Générer le Quiz & les Questions</span>
+                  </>
+                )}
               </button>
             </div>
           </form>
@@ -1699,6 +1936,15 @@ export default function MoodleEditor({
                       <Plus className="w-4 h-4" />
                       <span>Ajouter une Question</span>
                     </button>
+
+                    <button
+                      onClick={handleAiGeneration}
+                      disabled={aiGenerating}
+                      className="bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white text-xs font-bold py-2 px-3.5 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>{aiGenerating ? "Génération..." : "Générer via l'IA"}</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1709,6 +1955,23 @@ export default function MoodleEditor({
                     <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
                       Cliquez sur le bouton ci-dessus pour rédiger votre première question ou importez-la depuis votre Banque de questions.
                     </p>
+                    <div className="mt-5 flex flex-col sm:flex-row justify-center items-center gap-3">
+                      <button
+                        onClick={() => setIsCreatingQuestion(true)}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2.5 px-5 rounded-xl transition inline-flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Rédiger une question</span>
+                      </button>
+                      <button
+                        onClick={handleAiGeneration}
+                        disabled={aiGenerating}
+                        className="bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white text-xs font-bold py-2.5 px-5 rounded-xl transition inline-flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>{aiGenerating ? "Génération en cours..." : "Générer automatiquement via l'IA"}</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3">

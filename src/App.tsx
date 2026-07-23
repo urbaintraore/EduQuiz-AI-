@@ -56,6 +56,9 @@ import { AdminDashboard } from "./components/AdminDashboard";
 import Toast, { ToastType } from "./components/Toast";
 import { User, Course, Exam, Question, QuestionType, Submission, MonitoringConfig } from "./types";
 import { getApiUrl } from "./firebase";
+import * as XLSX from "xlsx";
+import { ExamCalendar } from "./components/ExamCalendar";
+import { NotificationCenter } from "./components/NotificationCenter";
 import {
   Radar,
   RadarChart,
@@ -213,10 +216,16 @@ function StudentExamsListView({ courses, onStartExam, studentSubmissions }: { co
 
   return (
     <div className="space-y-3">
-      {allExams.map(ex => {
+      {allExams.map((ex, idx) => {
         const isSubmitted = studentSubmissions.some(sub => sub.examId === ex.id);
         return (
-          <div key={ex.id} className="p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <motion.div
+            key={ex.id}
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.25, delay: idx * 0.05 }}
+            className="p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3"
+          >
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-[10px] font-mono px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-md font-bold">{ex.courseTitle}</span>
@@ -240,46 +249,82 @@ function StudentExamsListView({ courses, onStartExam, studentSubmissions }: { co
                 </button>
               )}
             </div>
-          </div>
+          </motion.div>
         );
       })}
     </div>
   );
 }
 
-function ExamQuestionEditor({ exam, onUpdateExam, triggerToast }: { exam: Exam, onUpdateExam: (exam: Exam) => void, triggerToast: any }) {
+function ExamQuestionEditor({
+  exam,
+  onUpdateExam,
+  triggerToast,
+  onAiGenerate,
+  aiGenerating
+}: {
+  exam: Exam;
+  onUpdateExam: (exam: Exam) => void;
+  triggerToast: any;
+  onAiGenerate?: () => Promise<void>;
+  aiGenerating?: boolean;
+}) {
   return (
     <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
       <div className="flex justify-between items-center">
         <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100">Éditeur de Questions — {exam.title}</h4>
-        <button
-          onClick={() => {
-            const newQ = {
-              id: "q-" + Date.now(),
-              examId: exam.id,
-              type: "mcq" as const,
-              statement: "Nouvelle question d'évaluation",
-              options: ["Option A", "Option B", "Option C", "Option D"],
-              correctAnswer: "Option A",
-              points: 2,
-              explanation: "Explication de la réponse correcte."
-            };
-            const updated = {
-              ...exam,
-              questions: [...(exam.questions || []), newQ]
-            };
-            onUpdateExam(updated);
-            triggerToast("Question ajoutée avec succès.", "success");
-          }}
-          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Ajouter une question</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          {onAiGenerate && (
+            <button
+              onClick={onAiGenerate}
+              disabled={aiGenerating}
+              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5 shadow-xs"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{aiGenerating ? "Génération..." : "Générer via l'IA"}</span>
+            </button>
+          )}
+          <button
+            onClick={() => {
+              const newQ = {
+                id: "q-" + Date.now(),
+                examId: exam.id,
+                type: "mcq" as const,
+                statement: "Nouvelle question d'évaluation",
+                options: ["Option A", "Option B", "Option C", "Option D"],
+                correctAnswer: "Option A",
+                points: 2,
+                explanation: "Explication de la réponse correcte."
+              };
+              const updated = {
+                ...exam,
+                questions: [...(exam.questions || []), newQ]
+              };
+              onUpdateExam(updated);
+              triggerToast("Question ajoutée avec succès.", "success");
+            }}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Ajouter une question</span>
+          </button>
+        </div>
       </div>
       <div className="space-y-3">
         {(!exam.questions || exam.questions.length === 0) ? (
-          <p className="text-xs text-slate-400 py-6 text-center">Aucune question configurée pour cet examen.</p>
+          <div className="py-8 text-center space-y-3">
+            <p className="text-xs text-slate-400">Aucune question configurée pour cet examen.</p>
+            {onAiGenerate && (
+              <button
+                onClick={onAiGenerate}
+                disabled={aiGenerating}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white rounded-xl text-xs font-bold transition cursor-pointer inline-flex items-center space-x-1.5 shadow-xs"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{aiGenerating ? "Génération automatique..." : "Générer automatiquement via l'IA"}</span>
+              </button>
+            )}
+          </div>
         ) : (
           exam.questions.map((q, idx) => (
             <div key={q.id} className="p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center">
@@ -512,6 +557,7 @@ export default function App() {
   const [studentTab, setStudentTab] = useState<'activities' | 'analytics'>('activities');
   const [studentAnalytics, setStudentAnalytics] = useState<any>(null);
   const [loadingStudentAnalytics, setLoadingStudentAnalytics] = useState<boolean>(false);
+  const [allStudentExams, setAllStudentExams] = useState<(Exam & { courseTitle?: string })[]>([]);
 
   // Student active taking states
   const [activeQuizExam, setActiveQuizExam] = useState<Exam | null>(null);
@@ -1021,6 +1067,28 @@ export default function App() {
     }
   }, [user]);
 
+  // Load all student exams for enrolled courses (for calendar and notifications)
+  useEffect(() => {
+    if (user?.role === "student" && courses.length > 0) {
+      async function loadAllExams() {
+        const list: (Exam & { courseTitle?: string })[] = [];
+        for (const c of courses) {
+          try {
+            const res = await fetch(`/api/courses/${c.id}/exams`);
+            if (res.ok) {
+              const data: Exam[] = await res.json();
+              data.forEach((ex) => {
+                list.push({ ...ex, courseTitle: c.title });
+              });
+            }
+          } catch (_) {}
+        }
+        setAllStudentExams(list);
+      }
+      loadAllExams();
+    }
+  }, [courses, user]);
+
   // Load active exam context (questions, submissions) if selected
   useEffect(() => {
     if (!activeExam) return;
@@ -1260,6 +1328,69 @@ export default function App() {
     } catch (e) {
       console.error(e);
       triggerToast("Erreur réseau lors de l'export des notes.", "error");
+    }
+  };
+
+  const handleExportGradesXLSX = async () => {
+    if (!activeCourse) return;
+    try {
+      const res = await fetch(`/api/courses/${activeCourse.id}/grades-export`);
+      if (!res.ok) {
+        triggerToast("Erreur lors de la récupération des notes.", "error");
+        return;
+      }
+      const data = await res.json();
+      const exams = data.exams || [];
+      const students = data.students || [];
+
+      const rows: any[] = [];
+      students.forEach((st: any) => {
+        const rowObj: Record<string, any> = {
+          "Etudiant ID": st.id,
+          "Adresse Email": st.email,
+          "Établissement": st.university || "N/A",
+          "Classe / Section": st.schoolClass || "N/A",
+          "Moyenne Générale (/20)": st.overallAverage !== null ? st.overallAverage : "N/A",
+          "Théorie & Concepts (%)": st.themes["Théorie & Concepts"] !== null ? st.themes["Théorie & Concepts"] : "N/A",
+          "Logique & Diagnostic (%)": st.themes["Logique & Diagnostic"] !== null ? st.themes["Logique & Diagnostic"] : "N/A",
+          "Appariement & Syntaxe (%)": st.themes["Appariement & Syntaxe"] !== null ? st.themes["Appariement & Syntaxe"] : "N/A",
+          "Calculs & Analyse (%)": st.themes["Calculs & Analyse"] !== null ? st.themes["Calculs & Analyse"] : "N/A",
+          "Démonstration & Rédaction (%)": st.themes["Démonstration & Rédaction"] !== null ? st.themes["Démonstration & Rédaction"] : "N/A",
+        };
+
+        exams.forEach((ex: any) => {
+          const colKey = `Examen: ${ex.title}`;
+          const score = st.examScores[ex.id];
+          if (score === "PENDING") {
+            rowObj[colKey] = "Correction en cours";
+          } else if (score === null || score === undefined) {
+            rowObj[colKey] = "Absent";
+          } else {
+            rowObj[colKey] = score;
+          }
+        });
+
+        rows.push(rowObj);
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      if (rows.length > 0) {
+        const max_cols = Object.keys(rows[0] || {}).map((k) => ({
+          wch: Math.max(k.length, 16)
+        }));
+        worksheet["!cols"] = max_cols;
+      }
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Relevé de Notes");
+
+      const safeName = activeCourse.title.replace(/[^a-zA-Z0-9]/g, "_");
+      XLSX.writeFile(workbook, `${safeName}_Notes_Matiere.xlsx`);
+
+      triggerToast("Notes exportées au format Excel (.xlsx) avec succès !", "success");
+    } catch (e) {
+      console.error(e);
+      triggerToast("Erreur lors de l'exportation Excel XLSX.", "error");
     }
   };
 
@@ -1881,6 +2012,42 @@ export default function App() {
             <div className="text-2xl font-extrabold text-indigo-600 mt-1">{passRate}%</div>
           </div>
         </div>
+
+        {activeCourse && (
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Exporter le Relevé de Notes Complète
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Générez le rapport de synthèse des notes des étudiants inscrits au cours
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={handleExportGradesCSV}
+                className="flex-1 sm:flex-none px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer border border-slate-200 dark:border-slate-700"
+              >
+                <Download className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Export CSV</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportGradesXLSX}
+                className="flex-1 sm:flex-none px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Export Excel (.xlsx)</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -2962,7 +3129,26 @@ export default function App() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.25 }}
+                    className="space-y-6"
                   >
+                  {/* Desktop Notification Banner */}
+                  <NotificationCenter
+                    userId={user.id}
+                    userRole={user.role}
+                    allExams={allStudentExams}
+                    studentSubmissions={studentSubmissions}
+                    triggerToast={triggerToast}
+                  />
+
+                  {/* Monthly Exam Calendar Component */}
+                  <ExamCalendar
+                    courses={courses}
+                    allExams={allStudentExams}
+                    studentSubmissions={studentSubmissions}
+                    onStartExam={startExamQuiz}
+                    onViewSubmission={handleViewSubmissionDetails}
+                  />
+
                   {/* Enrolled Courses & Exams Lists */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     
@@ -2980,10 +3166,13 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="space-y-4">
-                          {courses.map((course) => (
-                            <div
+                          {courses.map((course, idx) => (
+                            <motion.div
                               key={course.id}
-                              className="p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition"
+                              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              transition={{ duration: 0.25, delay: idx * 0.05 }}
+                              className="p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition shadow-2xs"
                             >
                               <div className="flex justify-between items-start gap-4">
                                 <div>
@@ -2998,7 +3187,7 @@ export default function App() {
                               <div className="mt-3 pt-3 border-t border-slate-200/50 flex justify-between items-center text-[11px] text-slate-400">
                                 <span>Cours géré par {course.teacherName}</span>
                               </div>
-                            </div>
+                            </motion.div>
                           ))}
                         </div>
                       )}
@@ -3044,8 +3233,14 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {studentSubmissions.map((sub) => (
-                              <tr key={sub.id} className="hover:bg-slate-50 transition">
+                            {studentSubmissions.map((sub, idx) => (
+                              <motion.tr
+                                key={sub.id}
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.2, delay: idx * 0.04 }}
+                                className="hover:bg-slate-50 transition"
+                              >
                                 <td className="p-3 font-semibold text-slate-950">{sub.examTitle}</td>
                                 <td className="p-3 text-slate-500">{sub.courseTitle}</td>
                                 <td className="p-3 font-mono text-slate-400">
@@ -3089,7 +3284,7 @@ export default function App() {
                                     <span>Télécharger</span>
                                   </button>
                                 </td>
-                              </tr>
+                              </motion.tr>
                             ))}
                           </tbody>
                         </table>
@@ -3487,6 +3682,8 @@ export default function App() {
                               setExams(exams.map(e => e.id === updated.id ? updated : e));
                             }}
                             triggerToast={triggerToast}
+                            onAiGenerate={handleAiGeneration}
+                            aiGenerating={aiGenerating}
                           />
                         </div>
                       )}

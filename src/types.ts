@@ -150,6 +150,8 @@ export interface Submission {
   id: string;
   studentId: string;
   examId: string;
+  examTitle?: string;
+  courseTitle?: string;
   answers: Record<string, any>; // questionId -> student response
   score: number | null; // null if manual evaluation is pending
   submittedAt: string;
