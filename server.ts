@@ -61,6 +61,138 @@ async function pdfParse(buffer: Buffer): Promise<{ text: string }> {
 
   throw new Error("No usable PDF parsing function found.");
 }
+
+// Helper to extract pairs from arbitrary text containing separators like ->, =>, ::, ➡️, etc.
+function extractPairsFromText(text: string): { keys: string[]; values: string[] } {
+  const keys: string[] = [];
+  const values: string[] = [];
+  if (!text) return { keys, values };
+
+  const segments = text.split(/\r?\n|\||,|;/);
+  for (let segment of segments) {
+    segment = segment.trim();
+    if (!segment) continue;
+
+    const match = segment.match(/^[^a-zA-Z0-9]*([^:=>\-➡️\n]+?)\s*(?:->|=>|::|➡️|=)\s*([^:=>\-➡️\n]+)/);
+    if (match) {
+      const left = match[1].replace(/^[•*\s-\d)]+/, "").trim();
+      const right = match[2].trim();
+      
+      if (left && right && left.length < 100 && right.length < 100) {
+        const lowerLeft = left.toLowerCase();
+        if (
+          !lowerLeft.includes("correct") &&
+          !lowerLeft.includes("associ") &&
+          !lowerLeft.includes("réponse") &&
+          !lowerLeft.includes("solution") &&
+          !lowerLeft.includes("explication") &&
+          !lowerLeft.includes("appariement")
+        ) {
+          if (!keys.includes(left)) {
+            keys.push(left);
+            values.push(right);
+          }
+        }
+      }
+    }
+  }
+  return { keys, values };
+}
+
+// Sanitizer & normalizer for questions (especially matching questions)
+function sanitizeQuestion(q: any) {
+  if (!q) return q;
+  if (q.type === "matching") {
+    let opts = Array.isArray(q.options) ? q.options.map((s: any) => String(s || "").trim()).filter(Boolean) : [];
+    let targets = Array.isArray(q.matchingTargets) ? q.matchingTargets.map((s: any) => String(s || "").trim()).filter(Boolean) : [];
+
+    // 1. If options is empty, try to extract pairs from statement, correctAnswer, and explanation
+    if (opts.length === 0) {
+      const combined = `${q.correctAnswer || ""} ${q.explanation || ""} ${q.statement || ""}`;
+      const extracted = extractPairsFromText(combined);
+      if (extracted.keys.length > 0) {
+        opts = extracted.keys;
+        targets = extracted.values;
+      }
+    }
+
+    // 2. If options has elements but targets is empty or shorter, see if we have separators in options
+    const hasSeparators = opts.some(opt => /^.+?\s*(?:->|=>|::|➡️|=)\s*.+$/.test(opt));
+    if (hasSeparators || targets.length === 0) {
+      const parsedKeys: string[] = [];
+      const parsedTargets: string[] = [];
+
+      opts.forEach((opt: string, idx: number) => {
+        const match = opt.match(/^(.+?)\s*(?:->|=>|::|➡️|=)\s*(.+)$/);
+        if (match) {
+          parsedKeys.push(match[1].trim());
+          parsedTargets.push(match[2].trim());
+        } else {
+          parsedKeys.push(opt);
+          if (targets[idx]) {
+            parsedTargets.push(targets[idx]);
+          }
+        }
+      });
+
+      if (parsedTargets.length > 0) {
+        opts = parsedKeys;
+        targets = parsedTargets;
+      }
+    }
+
+    // 3. If targets is still shorter than opts, try to find missing matches in correctAnswer or explanation
+    if (targets.length < opts.length && opts.length > 0) {
+      const combined = `${q.correctAnswer || ""} ${q.explanation || ""}`;
+      const extracted = extractPairsFromText(combined);
+      
+      const foundTargets: string[] = [];
+      opts.forEach((optKey: string, i: number) => {
+        if (targets[i]) {
+          foundTargets.push(targets[i]);
+        } else {
+          const extIdx = extracted.keys.findIndex(k => k.toLowerCase() === optKey.toLowerCase());
+          if (extIdx !== -1) {
+            foundTargets.push(extracted.values[extIdx]);
+          } else {
+            const lines = combined.split(/\r?\n|\||,|;/);
+            let found = false;
+            for (const line of lines) {
+              if (line.toLowerCase().includes(optKey.toLowerCase())) {
+                const parts = line.split(/(?:->|=>|::|➡️|=)/);
+                if (parts.length >= 2) {
+                  foundTargets.push(parts[parts.length - 1].trim());
+                  found = true;
+                  break;
+                }
+              }
+            }
+            if (!found) {
+              foundTargets.push(`Définition ${i + 1}`);
+            }
+          }
+        }
+      });
+      targets = foundTargets;
+    }
+
+    // 4. Ultimate fallback filling
+    if (opts.length > 0) {
+      while (targets.length < opts.length) {
+        const idx = targets.length;
+        targets.push(`Définition ${idx + 1}`);
+      }
+    }
+
+    q.options = opts;
+    q.matchingTargets = targets;
+
+    if (!q.correctAnswer || q.correctAnswer.startsWith("[Simulation") || q.correctAnswer === "Associations correctes" || q.correctAnswer.includes("descriptif")) {
+      q.correctAnswer = opts.map((opt: string, idx: number) => `${opt} ➡️ ${targets[idx]}`).join(" | ");
+    }
+  }
+  return q;
+}
 const mammoth = getCallable(mammothModule);
 const Tesseract = getCallable(tesseractModule);
 
@@ -1326,7 +1458,7 @@ app.get("/api/exams/:examId/questions", (req, res) => {
     }
   }
 
-  const questions = db.questions.filter(q => q.examId === examId);
+  const questions = db.questions.filter(q => q.examId === examId).map(sanitizeQuestion);
   res.json(questions);
 });
 
@@ -1345,7 +1477,7 @@ app.post("/api/exams/:examId/questions", (req, res) => {
   }
 
   const db = getDB();
-  const newQuestion = {
+  const newQuestion = sanitizeQuestion({
     id: "q_" + Math.random().toString(36).substring(2, 11),
     examId,
     type,
@@ -1365,7 +1497,7 @@ app.post("/api/exams/:examId/questions", (req, res) => {
     chapter: chapter || "",
     keywords: keywords || [],
     isArchived: isArchived !== undefined ? !!isArchived : false
-  };
+  });
 
   db.questions.push(newQuestion);
   saveDB(db);
@@ -1388,7 +1520,7 @@ app.put("/api/questions/:id", (req, res) => {
   if (idx === -1) return res.status(404).json({ error: "Question introuvable." });
 
   const existing = db.questions[idx];
-  db.questions[idx] = {
+  db.questions[idx] = sanitizeQuestion({
     ...existing,
     examId: examId !== undefined ? examId : existing.examId,
     type: type !== undefined ? type : existing.type,
@@ -1408,7 +1540,7 @@ app.put("/api/questions/:id", (req, res) => {
     chapter: chapter !== undefined ? chapter : existing.chapter,
     keywords: keywords !== undefined ? keywords : existing.keywords,
     isArchived: isArchived !== undefined ? !!isArchived : existing.isArchived,
-  };
+  });
 
   saveDB(db);
   res.json(db.questions[idx]);
@@ -1433,7 +1565,7 @@ app.post("/api/courses/:courseId/generate-from-chapters", async (req, res) => {
     return res.status(403).json({ error: "Accès refusé. Permissions insuffisantes." });
   }
   const { courseId } = req.params;
-  const { title, chaptersText, questionCount, difficulty, duration } = req.body;
+  const { title, chaptersText, questionCount, difficulty, duration, publishImmediately, status } = req.body;
 
   if (!title) {
     return res.status(400).json({ error: "Le titre du quiz est obligatoire." });
@@ -1446,6 +1578,9 @@ app.post("/api/courses/:courseId/generate-from-chapters", async (req, res) => {
   const course = db.courses.find(c => c.id === courseId);
   if (!course) return res.status(404).json({ error: "Cours introuvable." });
 
+  const isPublished = publishImmediately !== false && publishImmediately !== "false";
+  const targetStatus = status ? status : (isPublished ? "published" : "draft");
+
   const examId = "exm_" + Math.random().toString(36).substring(2, 11);
   const newExam = {
     id: examId,
@@ -1453,7 +1588,7 @@ app.post("/api/courses/:courseId/generate-from-chapters", async (req, res) => {
     title,
     duration: parseInt(duration) || 30,
     startDate: new Date().toISOString(),
-    status: "draft" as const,
+    status: targetStatus as any,
     subjectText: `Généré automatiquement par l'IA d'après les chapitres :\n${chaptersText}`,
     solutionText: "Généré automatiquement par l'IA d'après les chapitres d'étude.",
     gradingScaleText: "Sur 20 points",
@@ -1584,7 +1719,7 @@ Chaque question doit être de l'un des types suivants :
       model: "gemini-3.6-flash",
       contents: userPrompt,
       config: {
-        systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de concevoir un Quiz Moodle parfait basé sur des chapitres d'étude. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini.",
+        systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de concevoir un Quiz Moodle parfait basé sur des chapitres d'étude. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini. Les champs 'options' et 'matchingTargets' doivent être obligatoirement retournés sous forme de listes de chaînes (éventuellement vides [] s'ils ne s'appliquent pas au type de question). Pour les questions de type 'matching', ces deux listes doivent impérativement contenir les termes correspondants respectifs.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -1605,12 +1740,12 @@ Chaque question doit être de l'un des types suivants :
                   options: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Facultatif. Tableau de choix pour QCM ou termes de gauche à associer pour 'matching'."
+                    description: "Tableau de choix pour QCM ou termes de gauche à associer pour 'matching' (renvoie [] pour les autres types)."
                   },
                   matchingTargets: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Facultatif. Tableau de cibles de droite correspondantes à associer pour 'matching' (dans l'ordre correct)."
+                    description: "Tableau de cibles de droite correspondantes à associer pour 'matching' dans l'ordre correct (renvoie [] pour les autres types)."
                   },
                   correctAnswer: {
                     type: Type.STRING,
@@ -1625,7 +1760,7 @@ Chaque question doit être de l'un des types suivants :
                     description: "Explication ou justification pédagogique issue du corrigé officiel."
                   }
                 },
-                required: ["type", "statement", "correctAnswer", "points", "explanation"]
+                required: ["type", "statement", "correctAnswer", "points", "explanation", "options", "matchingTargets"]
               }
             }
           },
@@ -1658,15 +1793,14 @@ Chaque question doit être de l'un des types suivants :
 
     const parsedQuestions = Array.isArray(parsedObj) ? parsedObj : (parsedObj.questions || []);
 
-    const questionsToInsert = parsedQuestions.map((q: any) => ({
+    db.exams.push(newExam);
+    const questionsToInsert = parsedQuestions.map((q: any) => sanitizeQuestion({
       ...q,
       id: "q_" + Math.random().toString(36).substring(2, 11),
       examId,
       options: q.options || [],
       matchingTargets: q.matchingTargets || []
     }));
-
-    db.exams.push(newExam);
     db.questions.push(...questionsToInsert);
     saveDB(db);
 
@@ -1824,7 +1958,7 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
       model: "gemini-3.5-flash",
       contents: userPrompt,
       config: {
-        systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de lire des devoirs, corrigés et barèmes pour en faire des Quiz Moodle parfaits. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini.",
+        systemInstruction: "Tu es un assistant universitaire expert en ingénierie pédagogique LMS Moodle. Ta tâche est de lire des devoirs, corrigés et barèmes pour en faire des Quiz Moodle parfaits. Tu dois retourner uniquement un tableau JSON valide contenant des questions conformes au schéma défini. Les champs 'options' et 'matchingTargets' doivent être obligatoirement retournés sous forme de listes de chaînes (éventuellement vides [] s'ils ne s'appliquent pas au type de question). Pour les questions de type 'matching', ces deux listes doivent impérativement contenir les termes correspondants respectifs.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -1845,12 +1979,12 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
                   options: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Facultatif. Tableau de choix pour QCM ou termes de gauche à associer pour 'matching'."
+                    description: "Tableau de choix pour QCM ou termes de gauche à associer pour 'matching' (renvoie [] pour les autres types)."
                   },
                   matchingTargets: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Facultatif. Tableau de cibles de droite correspondantes à associer pour 'matching' (dans l'ordre correct)."
+                    description: "Tableau de cibles de droite correspondantes à associer pour 'matching' dans l'ordre correct (renvoie [] pour les autres types)."
                   },
                   correctAnswer: {
                     type: Type.STRING,
@@ -1865,7 +1999,7 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
                     description: "Explication ou justification pédagogique issue du corrigé officiel."
                   }
                 },
-                required: ["type", "statement", "correctAnswer", "points", "explanation"]
+                required: ["type", "statement", "correctAnswer", "points", "explanation", "options", "matchingTargets"]
               }
             }
           },
@@ -1919,7 +2053,7 @@ Génère entre 5 et 10 questions équilibrées et intelligentes. Distribue les p
     const parsedQuestions = Array.isArray(parsedObj) ? parsedObj : (parsedObj.questions || []);
 
     // Allocate continuous random IDs to generated questions and push to DB
-    const questionsToInsert = parsedQuestions.map((q: any) => ({
+    const questionsToInsert = parsedQuestions.map((q: any) => sanitizeQuestion({
       ...q,
       id: "q_" + Math.random().toString(36).substring(2, 11),
       examId,
@@ -2925,6 +3059,32 @@ app.get("/api/exams/:id/moodle-xml", (req, res) => {
         xml += `    <generalfeedback format="html">\n      <text><![CDATA[<p>${escapedExplanation}</p>]]></text>\n    </generalfeedback>\n`;
         xml += `    <defaultgrade>${q.points || 1}</defaultgrade>\n`;
         xml += `    <graderinfo format="html">\n      <text><![CDATA[<p>Guide du corrigé alternatif: ${q.correctAnswer}</p>]]></text>\n    </graderinfo>\n`;
+        xml += `  </question>\n\n`;
+        break;
+
+      case "matching":
+        xml += `  <question type="matching">\n`;
+        xml += `    <name><text>${escapedText.substring(0, 30)}...</text></name>\n`;
+        xml += `    <questiontext format="html">\n      <text><![CDATA[<p>${escapedText}</p>]]></text>\n    </questiontext>\n`;
+        xml += `    <generalfeedback format="html">\n      <text><![CDATA[<p>${escapedExplanation}</p>]]></text>\n    </generalfeedback>\n`;
+        xml += `    <defaultgrade>${q.points || 1}</defaultgrade>\n`;
+        xml += `    <shuffleanswers>true</shuffleanswers>\n`;
+        
+        const matchingKeys = q.options || [];
+        const matchingVals = q.matchingTargets || [];
+        matchingKeys.forEach((key: string, idx: number) => {
+          const val = matchingVals[idx] || "";
+          const escapedKey = key.replace(/[&<>'"]/g, (m) => {
+            switch (m) { case '&': return '&amp;'; case '<': return '&lt;'; case '>': return '&gt;'; case '\'': return '&apos;'; default: return '&quot;'; }
+          });
+          const escapedVal = val.replace(/[&<>'"]/g, (m) => {
+            switch (m) { case '&': return '&amp;'; case '<': return '&lt;'; case '>': return '&gt;'; case '\'': return '&apos;'; default: return '&quot;'; }
+          });
+          xml += `    <subquestion format="html">\n`;
+          xml += `      <text><![CDATA[${escapedKey}]]></text>\n`;
+          xml += `      <answer><text><![CDATA[${escapedVal}]]></text></answer>\n`;
+          xml += `    </subquestion>\n`;
+        });
         xml += `  </question>\n\n`;
         break;
 

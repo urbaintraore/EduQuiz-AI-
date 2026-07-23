@@ -3,10 +3,12 @@ import {
   BookOpen, Plus, Trash, Copy, Search, Filter, Settings, Folder, FolderPlus,
   Archive, Download, Upload, Eye, Check, X, ChevronRight, ChevronDown, Edit2,
   Save, FileText, Layout, List, Sparkles, Clock, Lock, Calendar, AlertTriangle,
-  GripVertical, ArrowUp, ArrowDown, Share2, HelpCircle, FileSpreadsheet
+  GripVertical, ArrowUp, ArrowDown, Share2, HelpCircle, FileSpreadsheet,
+  Send, EyeOff, CheckCircle
 } from "lucide-react";
 import { Course, Exam, Question, QuestionType, MonitoringConfig } from "../types";
 import { ScientificRichEditor } from "./ScientificRichEditor";
+import { normalizeMatchingQuestion } from "../utils/questionUtils";
 
 interface MoodleEditorProps {
   courses: Course[];
@@ -85,6 +87,7 @@ export default function MoodleEditor({
   const [genQuestionCount, setGenQuestionCount] = useState("10");
   const [genDifficulty, setGenDifficulty] = useState<"Facile" | "Moyen" | "Difficile">("Moyen");
   const [genDuration, setGenDuration] = useState("30");
+  const [genPublishImmediately, setGenPublishImmediately] = useState(true);
   const [isGeneratingChapters, setIsGeneratingChapters] = useState(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<string>>, extractionType: "subject" | "solution" = "subject") => {
@@ -324,6 +327,36 @@ export default function MoodleEditor({
     }
   };
 
+  const handleTogglePublishStatus = async (targetStatus: "published" | "draft") => {
+    if (!selectedExam) return;
+    try {
+      setAutosaveStatus("saving");
+      const res = await fetch(`/api/exams/${selectedExam.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: targetStatus })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSelectedExam(updated);
+        onUpdateExams(exams.map(e => e.id === updated.id ? updated : e));
+        setAutosaveStatus("synced");
+        triggerToast(
+          targetStatus === "published"
+            ? "🚀 Quiz publié avec succès ! Les étudiants peuvent maintenant y accéder et passer le test."
+            : "Quiz basculé en mode brouillon (masqué aux étudiants).",
+          "success"
+        );
+      } else {
+        setAutosaveStatus("error");
+        triggerToast("Erreur lors du changement de statut.", "error");
+      }
+    } catch (e) {
+      setAutosaveStatus("error");
+      triggerToast("Erreur de connexion au serveur.", "error");
+    }
+  };
+
   const handleGenerateFromChapters = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCourse) {
@@ -351,17 +384,24 @@ export default function MoodleEditor({
           chaptersText: genChaptersText,
           questionCount: genQuestionCount,
           difficulty: genDifficulty,
-          duration: genDuration
+          duration: genDuration,
+          publishImmediately: genPublishImmediately
         })
       });
 
       const data = await res.json();
       if (res.ok) {
-        triggerToast(data.message || "Quiz généré avec succès !", "success");
+        const isPub = data.exam?.status === "published" || data.exam?.status === "active";
+        triggerToast(
+          isPub
+            ? "🎉 Quiz généré et PUBLIÉ avec succès ! Les étudiants peuvent dès maintenant passer le test."
+            : "Quiz généré avec succès en mode brouillon.",
+          "success"
+        );
         // Update selection and list
         setSelectedExam(data.exam);
         setExamQuestions(data.questions || []);
-        onUpdateExams([data.exam, ...exams]);
+        onUpdateExams([data.exam, ...exams.filter(e => e.id !== data.exam.id)]);
         
         // Clear fields
         setGenTitle("");
@@ -554,8 +594,9 @@ export default function MoodleEditor({
     setQSubCategory(q.subCategory || "");
     setQChapter(q.chapter || "");
     setQKeywordsString(q.keywords ? q.keywords.join(", ") : "");
-    setQOptions(q.options && q.options.length > 0 ? [...q.options] : ["", "", ""]);
-    setQMatchingTargets(q.matchingTargets && q.matchingTargets.length > 0 ? [...q.matchingTargets] : ["", "", ""]);
+    const norm = q.type === "matching" ? normalizeMatchingQuestion(q) : q;
+    setQOptions(norm.options && norm.options.length > 0 ? [...norm.options] : ["", "", ""]);
+    setQMatchingTargets(norm.matchingTargets && norm.matchingTargets.length > 0 ? [...norm.matchingTargets] : ["", "", ""]);
     setQCorrectAnswer(q.correctAnswer || "");
     setQFeedbackPerOption(q.feedbackPerOption && q.feedbackPerOption.length > 0 ? [...q.feedbackPerOption] : ["", "", ""]);
     setQImageMedia(q.imageMedia || "");
@@ -825,15 +866,16 @@ export default function MoodleEditor({
     if (previewingQuestion.type === "mcq" || previewingQuestion.type === "true_false" || previewingQuestion.type === "short_answer" || previewingQuestion.type === "numerical" || previewingQuestion.type === "cloze") {
       isCorrect = String(previewingQuestion.correctAnswer).trim().toLowerCase() === String(previewAnswer).trim().toLowerCase();
     } else if (previewingQuestion.type === "matching") {
-      const opts = previewingQuestion.options || [];
-      const targets = previewingQuestion.matchingTargets || [];
+      const norm = normalizeMatchingQuestion(previewingQuestion);
+      const opts = norm.options;
+      const targets = norm.matchingTargets;
       let matchCount = 0;
       opts.forEach((opt, idx) => {
         if (previewAnswer && previewAnswer[opt] === targets[idx]) {
           matchCount++;
         }
       });
-      isCorrect = matchCount === opts.length;
+      isCorrect = opts.length > 0 && matchCount === opts.length;
       feedback = `Correspondance : ${matchCount} / ${opts.length} correct(s). `;
     } else if (previewingQuestion.type === "essay") {
       isCorrect = true; // Essays always pass preview but note manual correction
@@ -980,6 +1022,64 @@ export default function MoodleEditor({
 
       {/* Main Content Area */}
       <div className="flex-1 p-6 bg-slate-50/50 dark:bg-slate-950/20">
+
+        {/* Selected Quiz Status & Quick Action Banner */}
+        {selectedExam && (
+          <div className={`max-w-4xl mx-auto mb-6 p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all shadow-xs ${
+            selectedExam.status === "published"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-200"
+              : "bg-amber-500/10 border-amber-500/30 text-amber-950 dark:text-amber-200"
+          }`}>
+            <div className="flex items-center space-x-3">
+              <span className={`w-3 h-3 rounded-full shrink-0 ${
+                selectedExam.status === "published"
+                  ? "bg-emerald-500 animate-pulse"
+                  : "bg-amber-500"
+              }`} />
+              <div>
+                <div className="flex items-center space-x-2 flex-wrap gap-1">
+                  <span className="text-xs font-extrabold uppercase tracking-wider font-mono">
+                    Quiz : {selectedExam.title}
+                  </span>
+                  <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full font-mono uppercase ${
+                    selectedExam.status === "published"
+                      ? "bg-emerald-600 text-white"
+                      : "bg-amber-600 text-white"
+                  }`}>
+                    {selectedExam.status === "published" ? "◉ PUBLIÉ & ACTIF POUR LES ÉTUDIANTS" : "BROUILLON (MASQUÉ AUX ÉTUDIANTS)"}
+                  </span>
+                </div>
+                <p className="text-[11px] opacity-80 mt-0.5">
+                  {selectedExam.status === "published"
+                    ? "Ce quiz est actuellement visible et accessible aux étudiants inscrits pour passer leur évaluation."
+                    : "Ce quiz est en mode brouillon (masqué). Cliquez sur le bouton ci-contre pour le publier immédiatement pour les étudiants."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 w-full sm:w-auto justify-end shrink-0">
+              {selectedExam.status === "published" ? (
+                <button
+                  type="button"
+                  onClick={() => handleTogglePublishStatus("draft")}
+                  className="px-4 py-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold rounded-xl transition cursor-pointer flex items-center space-x-1.5 shadow-xs"
+                >
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Passer en Brouillon</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleTogglePublishStatus("published")}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer flex items-center space-x-2 border border-emerald-500"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>🚀 PUBLIER LE QUIZ MAINTENANT</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: QUIZ SETUP FORM */}
         {activeTab === "quiz_setup" && (
@@ -1288,6 +1388,14 @@ export default function MoodleEditor({
                 <Archive className="w-4 h-4" />
                 <span>Enregistrer comme brouillon</span>
               </button>
+              <button
+                type="button"
+                onClick={(e) => handleCreateOrUpdateQuiz(e, "published")}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-6 rounded-xl shadow-md transition duration-150 flex items-center space-x-2 cursor-pointer border border-indigo-500"
+              >
+                <Send className="w-4 h-4" />
+                <span>🚀 Enregistrer et publier en ligne</span>
+              </button>
             </div>
           </form>
         )}
@@ -1398,6 +1506,27 @@ export default function MoodleEditor({
                     onChange={(e) => setGenDuration(e.target.value)}
                     className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 font-semibold"
                   />
+                </div>
+
+                <div className="pt-2">
+                  <label className="flex items-start space-x-3 p-3.5 rounded-xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-900/60 cursor-pointer hover:bg-indigo-100/50 dark:hover:bg-indigo-900/40 transition">
+                    <input
+                      type="checkbox"
+                      checked={genPublishImmediately}
+                      onChange={(e) => setGenPublishImmediately(e.target.checked)}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200 block">
+                        🚀 Publier immédiatement le Quiz pour les étudiants
+                      </span>
+                      <span className="text-[10px] text-slate-600 dark:text-slate-400 block mt-0.5 leading-tight">
+                        {genPublishImmediately
+                          ? "Le test sera directement accessible et visible dans l'espace étudiant dès la fin de la génération."
+                          : "Le test sera créé en mode Brouillon (masqué aux étudiants jusqu'à votre publication manuelle)."}
+                      </span>
+                    </div>
+                  </label>
                 </div>
               </div>
             </div>
@@ -1945,6 +2074,16 @@ export default function MoodleEditor({
                       <Sparkles className="w-4 h-4" />
                       <span>{aiGenerating ? "Génération..." : "Générer via l'IA"}</span>
                     </button>
+
+                    {selectedExam?.status !== "published" && (
+                      <button
+                        onClick={() => handleTogglePublishStatus("published")}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                      >
+                        <Send className="w-4 h-4" />
+                        <span>🚀 Publier le Quiz</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -2337,27 +2476,32 @@ export default function MoodleEditor({
                 )}
 
                 {/* Matching */}
-                {previewingQuestion.type === "matching" && (
-                  <div className="space-y-2">
-                    {(previewingQuestion.options || []).map(opt => (
-                      <div key={opt} className="flex justify-between items-center bg-white dark:bg-slate-800 p-2.5 rounded-lg border border-slate-100">
-                        <span className="text-xs font-semibold">{opt}</span>
-                        <select
-                          value={previewAnswer?.[opt] || ""}
-                          onChange={(e) => {
-                            setPreviewAnswer({ ...previewAnswer, [opt]: e.target.value });
-                          }}
-                          className="text-xs border border-slate-200 dark:border-slate-700 rounded px-1.5 py-1 bg-slate-50 dark:bg-slate-900"
-                        >
-                          <option value="">Sélectionnez...</option>
-                          {(previewingQuestion.matchingTargets || []).map(t => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {previewingQuestion.type === "matching" && (() => {
+                  const norm = normalizeMatchingQuestion(previewingQuestion);
+                  const opts = norm.options;
+                  const targets = Array.from(new Set(norm.matchingTargets));
+                  return (
+                    <div className="space-y-2">
+                      {opts.map((opt, idx) => (
+                        <div key={opt + "_" + idx} className="flex justify-between items-center bg-white dark:bg-slate-800 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700">
+                          <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{opt}</span>
+                          <select
+                            value={previewAnswer?.[opt] || ""}
+                            onChange={(e) => {
+                              setPreviewAnswer({ ...previewAnswer, [opt]: e.target.value });
+                            }}
+                            className="text-xs border border-slate-200 dark:border-slate-700 rounded px-2 py-1 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
+                          >
+                            <option value="">Sélectionnez...</option>
+                            {targets.map(t => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {/* Essay */}
                 {previewingQuestion.type === "essay" && (

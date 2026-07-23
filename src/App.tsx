@@ -57,6 +57,7 @@ import { AdminDashboard } from "./components/AdminDashboard";
 import Toast, { ToastType } from "./components/Toast";
 import { User, Course, Exam, Question, QuestionType, Submission, MonitoringConfig } from "./types";
 import { getApiUrl } from "./firebase";
+import { normalizeMatchingQuestion } from "./utils/questionUtils";
 import * as XLSX from "xlsx";
 import { ExamCalendar } from "./components/ExamCalendar";
 import { NotificationCenter } from "./components/NotificationCenter";
@@ -2155,10 +2156,11 @@ export default function App() {
     if (ans === undefined || ans === null) return false;
     if (typeof ans === "string" && ans.trim() === "") return false;
     if (q.type === "matching") {
-      const opts = q.options || [];
+      const norm = normalizeMatchingQuestion(q);
+      const opts = norm.options || [];
       if (opts.length === 0) return false;
-      const subAnswers = ans || {};
-      return opts.every((opt) => subAnswers[opt] && subAnswers[opt].trim() !== "");
+      const subAnswers = typeof ans === "string" ? JSON.parse(ans) : (ans || {});
+      return opts.every((opt) => subAnswers[opt] && String(subAnswers[opt]).trim() !== "");
     }
     return true;
   };
@@ -2591,35 +2593,44 @@ export default function App() {
                                   )}
 
                                   {/* Matching Type */}
-                                  {q.type === "matching" && (
-                                    <div className="space-y-3">
-                                      <p className="text-xs text-slate-400 font-mono mb-2">Reliez chaque concept de gauche à sa cible de droite correspondante :</p>
-                                      {(q.options || []).map((keyItem) => {
-                                        const currentChoice = studentQuizAnswers[q.id]?.[keyItem] || "";
-                                        return (
-                                          <div key={keyItem} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-100">
-                                            <span className="text-sm font-semibold text-slate-800">{keyItem}</span>
-                                            <select
-                                              value={currentChoice}
-                                              onChange={(e) => {
-                                                const nextMatches = { ...(studentQuizAnswers[q.id] || {}) };
-                                                nextMatches[keyItem] = e.target.value;
-                                                handleStudentAnswerChange(q.id, nextMatches);
-                                              }}
-                                              className="text-xs border border-slate-200 rounded-lg p-1.5 focus:ring-1 focus:ring-indigo-500 max-w-xs"
-                                            >
-                                              <option value="">Sélectionner l'appariement...</option>
-                                              {(q.matchingTargets || []).map((target) => (
-                                                <option key={target} value={target}>
-                                                  {target}
-                                                </option>
-                                              ))}
-                                            </select>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
+                                  {q.type === "matching" && (() => {
+                                    const norm = normalizeMatchingQuestion(q);
+                                    const keys = norm.options || [];
+                                    const targets = norm.matchingTargets || [];
+                                    const targetChoices = Array.from(new Set(targets));
+
+                                    return (
+                                      <div className="space-y-3">
+                                        <p className="text-xs text-slate-500 font-semibold mb-2 flex items-center gap-1.5">
+                                          <span>Reliez chaque concept de gauche à sa cible de droite correspondante :</span>
+                                        </p>
+                                        {keys.map((keyItem, index) => {
+                                          const currentChoice = studentQuizAnswers[q.id]?.[keyItem] || "";
+                                          return (
+                                            <div key={keyItem + "_" + index} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 sm:w-1/2">{keyItem}</span>
+                                              <select
+                                                value={currentChoice}
+                                                onChange={(e) => {
+                                                  const nextMatches = { ...(studentQuizAnswers[q.id] || {}) };
+                                                  nextMatches[keyItem] = e.target.value;
+                                                  handleStudentAnswerChange(q.id, nextMatches);
+                                                }}
+                                                className="text-xs border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500 sm:w-1/2 cursor-pointer shadow-xs"
+                                              >
+                                                <option value="">Sélectionner l'appariement...</option>
+                                                {targetChoices.map((targetVal) => (
+                                                  <option key={targetVal} value={targetVal}>
+                                                    {targetVal}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Short Answer */}
                                   {q.type === "short_answer" && (
@@ -3270,14 +3281,15 @@ export default function App() {
                               isCorrect = String(q.correctAnswer).trim().toLowerCase() === String(studentAns).trim().toLowerCase();
                             } else if (q.type === "matching") {
                               try {
+                                const norm = normalizeMatchingQuestion(q);
                                 const matchingMap = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
                                 let matches = 0;
-                                const opts = q.options || [];
-                                const targets = q.matchingTargets || [];
+                                const opts = norm.options || [];
+                                const targets = norm.matchingTargets || [];
                                 opts.forEach((key: string, i: number) => {
                                   if (matchingMap && matchingMap[key] === targets[i]) matches++;
                                 });
-                                isCorrect = matches === opts.length;
+                                isCorrect = opts.length > 0 && matches === opts.length;
                               } catch {
                                 isCorrect = false;
                               }
@@ -3311,7 +3323,17 @@ export default function App() {
                                     <span className="bg-white px-2 py-0.5 rounded border border-slate-200/50 font-medium text-slate-900">
                                       {studentAns === undefined || studentAns === null
                                         ? "Non répondu" 
-                                        : (typeof studentAns === "object" ? JSON.stringify(studentAns) : <MathRenderer text={String(studentAns)} />)}
+                                        : q.type === "matching"
+                                          ? (() => {
+                                              try {
+                                                const m = typeof studentAns === "string" ? JSON.parse(studentAns) : studentAns;
+                                                if (!m || typeof m !== "object") return String(studentAns);
+                                                return Object.entries(m).map(([k, v]) => `${k} ➡️ ${v}`).join(", ");
+                                              } catch {
+                                                return String(studentAns);
+                                              }
+                                            })()
+                                          : (typeof studentAns === "object" ? JSON.stringify(studentAns) : <MathRenderer text={String(studentAns)} />)}
                                     </span>
                                   </div>
 
@@ -3319,7 +3341,14 @@ export default function App() {
                                     <div className="flex items-center space-x-1.5 text-emerald-700">
                                       <span className="font-semibold">Réponse attendue :</span>
                                       <span className="bg-emerald-50/60 px-2 py-0.5 rounded border border-emerald-100 font-bold">
-                                        <MathRenderer text={String(q.correctAnswer)} />
+                                        <MathRenderer text={
+                                          q.type === "matching"
+                                            ? (() => {
+                                                const norm = normalizeMatchingQuestion(q);
+                                                return norm.options.map((opt, i) => `${opt} ➡️ ${norm.matchingTargets[i]}`).join(" | ");
+                                              })()
+                                            : String(q.correctAnswer)
+                                        } />
                                       </span>
                                     </div>
                                   )}
